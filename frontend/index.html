@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Enhanced Conspiracy Theory Debunker</title>
+    <link rel="stylesheet" href="styles.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <header>
+        <div class="logo">🕵️</div>
+        <h1>Enhanced Conspiracy Theory Debunker</h1>
+        <p>Advanced AI-powered fact-checking with audio analysis, prosody detection, and real-time verification</p>
+    </header>
+    <main>
+        <section id="input-section">
+            <h2>Input Your Claim</h2>
+            <div class="input-container">
+                <div class="audio-input-container">
+                    <label for="audio-input">Upload or Record Audio</label>
+                    <input type="file" id="audio-input" accept="audio/*">
+                </div>
+                <div class="text-input-container">
+                    <label for="text-claim-input">Or Enter Text Claim</label>
+                    <textarea id="text-claim-input" placeholder="e.g., 'The Earth is flat' or 'Vaccines cause autism'"></textarea>
+                </div>
+                <div class="options-container">
+                    <label>
+                        <input type="checkbox" id="enable-prosody" checked>
+                        Enable Advanced Audio Analysis
+                    </label>
+                </div>
+                <button id="analyze-btn">Analyze Claim</button>
+            </div>
+            
+            <div class="examples-container">
+                <h3>Quick Examples:</h3>
+                <div class="example-buttons">
+                    <button class="example-btn">The moon landing was faked</button>
+                    <button class="example-btn">Vaccines cause autism</button>
+                    <button class="example-btn">Climate change is a hoax</button>
+                    <button class="example-btn">5G towers cause COVID-19</button>
+                </div>
+            </div>
+        </section>
+        <section id="results-section">
+            <h2>Analysis Results</h2>
+            
+            <div class="tabs">
+                <div class="tab-buttons">
+                    <button class="tab-btn active" data-tab="summary">Summary</button>
+                    <button class="tab-btn" data-tab="full-analysis">Full Analysis</button>
+                    <button class="tab-btn" data-tab="timeline">Timeline</button>
+                    <button class="tab-btn" data-tab="credibility-radar">Credibility Radar</button>
+                    <button class="tab-btn" data-tab="audio-analysis">Audio Analysis</button>
+                    <button class="tab-btn" data-tab="sources">Sources</button>
+                </div>
+                
+                <div class="tab-content">
+                    <div id="summary" class="tab-pane active">
+                        <h3>Summary</h3>
+                        <div class="result-card">
+                            <h4>Transcription</h4>
+                            <p id="transcription-output" class="output-text">No transcription available yet</p>
+                        </div>
+                        <div class="result-card">
+                            <h4>Confidence Level</h4>
+                            <p id="confidence-output" class="output-text">No confidence data available yet</p>
+                        </div>
+                        <div class="result-card">
+                            <h4>Extracted Claim</h4>
+                            <p id="claim-output" class="output-text">No claim extracted yet</p>
+                        </div>
+                    </div>
+                    
+                    <div id="full-analysis" class="tab-pane">
+                        <h3>Full Analysis</h3>
+                        <div class="result-card">
+                            <div id="analysis-output" class="output-text">No analysis available yet</div>
+                        </div>
+                    </div>
+                    
+                    <div id="timeline" class="tab-pane">
+                        <h3>Timeline</h3>
+                        <div class="result-card">
+                            <div id="timeline-output">No timeline available yet</div>
+                        </div>
+                    </div>
+                    
+                    <div id="credibility-radar" class="tab-pane">
+                        <h3>Credibility Radar</h3>
+                        <div class="result-card">
+                            <div id="credibility-output">No credibility data available yet</div>
+                        </div>
+                    </div>
+                    
+                    <div id="audio-analysis" class="tab-pane">
+                        <h3>Audio Analysis</h3>
+                        <div class="result-card">
+                            <div id="prosody-output" class="output-text">No audio analysis available yet</div>
+                        </div>
+                    </div>
+                    
+                    <div id="sources" class="tab-pane">
+                        <h3>Sources</h3>
+                        <div class="result-card">
+                            <div id="sources-output" class="output-text">No sources available yet</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+    <footer>
+        <div class="footer-content">
+            <div class="footer-section">
+                <h3>Technical Features</h3>
+                <div class="features-grid">
+                    <div class="feature">
+                        <h4>Audio Processing</h4>
+                        <p>Whisper-Small • Prosody Analysis • Emotion Detection</p>
+                    </div>
+                    <div class="feature">
+                        <h4>AI Models</h4>
+                        <p>GPT-4 • MPNet Embeddings • RoBERTa Sentiment</p>
+                    </div>
+                    <div class="feature">
+                        <h4>Knowledge Base</h4>
+                        <p>Wikipedia • Fact-Check Datasets • Scientific Literature</p>
+                    </div>
+                    <div class="feature">
+                        <h4>Analysis Types</h4>
+                        <p>Sarcasm Detection • Credibility Scoring • Source Verification</p>
+                    </div>
+                </div>
+            </div>
+            <p class="copyright">Built for data scientists, researchers, and AI safety professionals. Version 2.0</p>
+        </div>
+    </footer>
+    
+    <script src="script.js"></script>
+    <script>
+        // Tab functionality
+        document.addEventListener('DOMContentLoaded', function() {
+            const tabButtons = document.querySelectorAll('.tab-btn');
+            const tabPanes = document.querySelectorAll('.tab-pane');
+            
+            tabButtons.forEach(button => {
+                button.addEventListener('click', function() {
+                    // Remove active class from all buttons and panes
+                    tabButtons.forEach(btn => btn.classList.remove('active'));
+                    tabPanes.forEach(pane => pane.classList.remove('active'));
+                    
+                    // Add active class to clicked button and corresponding pane
+                    this.classList.add('active');
+                    const tabId = this.getAttribute('data-tab');
+                    document.getElementById(tabId).classList.add('active');
+                });
+            });
+        });
+    </script>
+</body>
+</html>

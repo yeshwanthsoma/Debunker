@@ -1,0 +1,17 @@
+flask==2.3.3
+flask-cors==4.0.0
+gradio==4.19.2
+transformers==4.36.2
+sentence-transformers==2.2.2
+datasets==2.14.6
+langchain-community==0.0.16
+langchain-huggingface==0.0.1
+langchain-core==0.1.15
+langchain==0.0.335
+langchain-openai==0.0.5
+plotly==5.18.0
+pandas==2.1.1
+librosa==0.10.1
+numpy==1.26.0
+torch==2.1.0
+requests==2.31.0
