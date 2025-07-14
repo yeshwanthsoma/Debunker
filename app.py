@@ -33,8 +33,8 @@ from functools import lru_cache
 warnings.filterwarnings('ignore')
 
 # Environment setup
-os.environ["HUGGINGFACEHUB_API_TOKEN"] = "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"
-os.environ["OPENAI_API_KEY"] = "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"
+os.environ["HUGGINGFACEHUB_API_TOKEN"] = ""
+os.environ["OPENAI_API_KEY"] = ""
 
 class EnhancedFactChecker:
     def __init__(self):
