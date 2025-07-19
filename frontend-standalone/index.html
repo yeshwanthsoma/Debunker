@@ -1,0 +1,596 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TruthLens - Audio-Driven Fact Verification</title>
+    <link rel="stylesheet" href="styles.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <meta name="description" content="Professional AI-powered fact-checking with advanced audio analysis and real-time verification">
+    <meta name="keywords" content="fact-checking, audio analysis, misinformation, AI verification, truth detection">
+</head>
+<body>
+    <!-- Navigation Bar -->
+    <nav class="navbar">
+        <div class="nav-container">
+            <div class="nav-brand">
+                <div class="brand-icon">🎯</div>
+                <div class="brand-text">
+                    <span class="brand-name">TruthLens</span>
+                    <span class="brand-tagline">Audio-Driven Fact Verification</span>
+                </div>
+            </div>
+            <div class="nav-actions">
+                <button class="nav-btn" id="settings-btn">⚙️ Settings</button>
+                <button class="nav-btn primary" id="new-analysis-btn">🔍 New Analysis</button>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Container -->
+    <main class="main-container">
+        <!-- Screen 1: Welcome/Landing -->
+        <section class="screen active" id="welcome-screen">
+            <div class="welcome-container">
+                <div class="hero-section">
+                    <div class="hero-content">
+                        <h1 class="hero-title">
+                            <span class="gradient-text">Audio-Driven</span>
+                            <br>Fact Verification
+                        </h1>
+                        <p class="hero-description">
+                            Upload audio clips or voice memos to get instant fact-checking with 
+                            advanced prosody analysis, timeline visualizations, and evidence-based debunking.
+                        </p>
+                        <div class="hero-features">
+                            <div class="feature-item">
+                                <span class="feature-icon">🎤</span>
+                                <span>Audio Transcription & Analysis</span>
+                            </div>
+                            <div class="feature-item">
+                                <span class="feature-icon">🧠</span>
+                                <span>AI-Powered Fact Checking</span>
+                            </div>
+                            <div class="feature-item">
+                                <span class="feature-icon">📊</span>
+                                <span>Interactive Timeline Reports</span>
+                            </div>
+                            <div class="feature-item">
+                                <span class="feature-icon">🎯</span>
+                                <span>Sarcasm & Emotion Detection</span>
+                            </div>
+                        </div>
+                        <button class="cta-button" id="start-analysis-btn">
+                            <span class="btn-icon">🚀</span>
+                            Start Fact-Checking
+                        </button>
+                    </div>
+                    <div class="hero-visual">
+                        <div class="demo-preview">
+                            <div class="preview-header">
+                                <div class="preview-dots">
+                                    <span></span><span></span><span></span>
+                                </div>
+                                <span class="preview-title">Analysis Preview</span>
+                            </div>
+                            <div class="preview-content">
+                                <div class="demo-waveform"></div>
+                                <div class="demo-analysis">
+                                    <div class="demo-claim">"The moon landing was faked..."</div>
+                                    <div class="demo-verdict verdict-false">FALSE</div>
+                                    <div class="demo-confidence">Confidence: 95%</div>
+                                    <div class="demo-timeline">
+                                        <div class="timeline-step active">Audio Processing</div>
+                                        <div class="timeline-step active">Claim Extraction</div>
+                                        <div class="timeline-step active">Fact Verification</div>
+                                        <div class="timeline-step">Report Generation</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="examples-section">
+                    <h2 class="section-title">Quick Test Examples</h2>
+                    <div class="examples-grid">
+                        <button class="example-card" data-claim="The moon landing was faked">
+                            <div class="example-icon">🌙</div>
+                            <h3>Moon Landing Conspiracy</h3>
+                            <p>"The moon landing was faked by NASA"</p>
+                        </button>
+                        <button class="example-card" data-claim="Vaccines cause autism">
+                            <div class="example-icon">💉</div>
+                            <h3>Vaccine Misinformation</h3>
+                            <p>"Vaccines cause autism in children"</p>
+                        </button>
+                        <button class="example-card" data-claim="5G towers cause COVID-19">
+                            <div class="example-icon">📡</div>
+                            <h3>5G Conspiracy</h3>
+                            <p>"5G towers spread COVID-19"</p>
+                        </button>
+                        <button class="example-card" data-claim="Climate change is a hoax">
+                            <div class="example-icon">🌍</div>
+                            <h3>Climate Denial</h3>
+                            <p>"Climate change is a government hoax"</p>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Screen 2: Upload Interface -->
+        <section class="screen" id="upload-screen">
+            <div class="upload-container">
+                <div class="screen-header">
+                    <button class="back-btn" data-screen="welcome-screen">← Back</button>
+                    <h1 class="screen-title">Upload Your Claim</h1>
+                    <div class="progress-indicator">
+                        <div class="progress-step active">Upload</div>
+                        <div class="progress-step">Analyze</div>
+                        <div class="progress-step">Results</div>
+                    </div>
+                </div>
+
+                <div class="upload-content">
+                    <!-- Audio Upload Section -->
+                    <div class="upload-section">
+                        <h2 class="upload-title">🎤 Audio Upload</h2>
+                        <div class="dropzone" id="audio-dropzone">
+                            <input type="file" id="audio-input" accept="audio/*" hidden>
+                            <div class="dropzone-content">
+                                <div class="dropzone-icon">📁</div>
+                                <h3>Drop audio file here or click to browse</h3>
+                                <p>Supports MP3, WAV, M4A, OGG files up to 50MB</p>
+                                <button class="upload-btn" onclick="document.getElementById('audio-input').click()">
+                                    Choose File
+                                </button>
+                            </div>
+                            <div class="file-preview" style="display: none;">
+                                <div class="file-info">
+                                    <div class="file-icon">🎵</div>
+                                    <div class="file-details">
+                                        <div class="file-name"></div>
+                                        <div class="file-size"></div>
+                                    </div>
+                                    <button class="remove-file">×</button>
+                                </div>
+                                <div class="audio-controls">
+                                    <audio controls></audio>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Text Input Section -->
+                    <div class="input-divider">
+                        <span>OR</span>
+                    </div>
+
+                    <div class="text-section">
+                        <h2 class="upload-title">✍️ Text Input</h2>
+                        <div class="text-input-container">
+                            <textarea 
+                                id="text-claim-input" 
+                                placeholder="Type or paste the claim you want to fact-check here..."
+                                maxlength="2000"
+                            ></textarea>
+                            <div class="input-footer">
+                                <div class="char-counter">
+                                    <span id="char-count">0</span>/2000 characters
+                                </div>
+                                <div class="text-actions">
+                                    <button class="text-btn" id="clear-text">Clear</button>
+                                    <button class="text-btn" id="paste-text">Paste</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Analysis Options -->
+                    <div class="options-section">
+                        <h3 class="options-title">Analysis Options</h3>
+                        <div class="options-grid">
+                            <label class="option-card">
+                                <input type="checkbox" id="enable-prosody" checked>
+                                <div class="option-content">
+                                    <div class="option-icon">🎵</div>
+                                    <div class="option-text">
+                                        <h4>Advanced Audio Analysis</h4>
+                                        <p>Detect sarcasm, emotion, and audio authenticity</p>
+                                    </div>
+                                </div>
+                            </label>
+                            <label class="option-card">
+                                <input type="checkbox" id="enable-timeline" checked>
+                                <div class="option-content">
+                                    <div class="option-icon">📊</div>
+                                    <div class="option-text">
+                                        <h4>Timeline Visualization</h4>
+                                        <p>Generate interactive timeline reports</p>
+                                    </div>
+                                </div>
+                            </label>
+                            <label class="option-card">
+                                <input type="checkbox" id="enable-debate" checked>
+                                <div class="option-content">
+                                    <div class="option-icon">⚔️</div>
+                                    <div class="option-text">
+                                        <h4>Debate Mode</h4>
+                                        <p>Show counterarguments and rebuttals</p>
+                                    </div>
+                                </div>
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- Action Buttons -->
+                    <div class="action-section">
+                        <button class="analyze-button" id="start-analysis" disabled>
+                            <span class="btn-icon">🔍</span>
+                            <span class="btn-text">Start Analysis</span>
+                            <span class="btn-loader" style="display: none;">
+                                <div class="spinner"></div>
+                                Analyzing...
+                            </span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Screen 3: Analysis Progress -->
+        <section class="screen" id="progress-screen">
+            <div class="progress-container">
+                <div class="screen-header">
+                    <h1 class="screen-title">Analyzing Your Claim</h1>
+                    <div class="progress-indicator">
+                        <div class="progress-step completed">Upload</div>
+                        <div class="progress-step active">Analyze</div>
+                        <div class="progress-step">Results</div>
+                    </div>
+                </div>
+
+                <div class="analysis-progress">
+                    <div class="progress-visual">
+                        <div class="analysis-animation">
+                            <div class="waveform-container">
+                                <div class="waveform-bars">
+                                    <div class="bar"></div>
+                                    <div class="bar"></div>
+                                    <div class="bar"></div>
+                                    <div class="bar"></div>
+                                    <div class="bar"></div>
+                                    <div class="bar"></div>
+                                    <div class="bar"></div>
+                                    <div class="bar"></div>
+                                </div>
+                            </div>
+                            <div class="brain-animation">🧠</div>
+                        </div>
+                    </div>
+
+                    <div class="progress-steps">
+                        <div class="step-item active" id="step-upload">
+                            <div class="step-icon">📤</div>
+                            <div class="step-content">
+                                <h3>Processing Upload</h3>
+                                <p>Validating and preparing your input...</p>
+                            </div>
+                            <div class="step-status">✓</div>
+                        </div>
+                        <div class="step-item" id="step-transcribe">
+                            <div class="step-icon">🎤</div>
+                            <div class="step-content">
+                                <h3>Audio Transcription</h3>
+                                <p>Converting speech to text using Whisper AI...</p>
+                            </div>
+                            <div class="step-status">⏳</div>
+                        </div>
+                        <div class="step-item" id="step-extract">
+                            <div class="step-icon">🎯</div>
+                            <div class="step-content">
+                                <h3>Claim Extraction</h3>
+                                <p>Identifying key claims and statements...</p>
+                            </div>
+                            <div class="step-status">⏳</div>
+                        </div>
+                        <div class="step-item" id="step-prosody">
+                            <div class="step-icon">🎵</div>
+                            <div class="step-content">
+                                <h3>Prosody Analysis</h3>
+                                <p>Analyzing tone, sarcasm, and emotional markers...</p>
+                            </div>
+                            <div class="step-status">⏳</div>
+                        </div>
+                        <div class="step-item" id="step-factcheck">
+                            <div class="step-icon">🔍</div>
+                            <div class="step-content">
+                                <h3>Fact Verification</h3>
+                                <p>Cross-referencing against knowledge bases...</p>
+                            </div>
+                            <div class="step-status">⏳</div>
+                        </div>
+                        <div class="step-item" id="step-report">
+                            <div class="step-icon">📊</div>
+                            <div class="step-content">
+                                <h3>Report Generation</h3>
+                                <p>Creating timeline and visual reports...</p>
+                            </div>
+                            <div class="step-status">⏳</div>
+                        </div>
+                    </div>
+
+                    <div class="progress-stats">
+                        <div class="stat-item">
+                            <span class="stat-label">Elapsed Time</span>
+                            <span class="stat-value" id="elapsed-time">0s</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-label">Processing Step</span>
+                            <span class="stat-value" id="current-step">Initializing...</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-label">Estimated Completion</span>
+                            <span class="stat-value" id="eta">Calculating...</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Screen 4: Results Dashboard -->
+        <section class="screen" id="results-screen">
+            <div class="results-container">
+                <div class="screen-header">
+                    <button class="back-btn" data-screen="upload-screen">← New Analysis</button>
+                    <h1 class="screen-title">Fact-Check Results</h1>
+                    <div class="progress-indicator">
+                        <div class="progress-step completed">Upload</div>
+                        <div class="progress-step completed">Analyze</div>
+                        <div class="progress-step active">Results</div>
+                    </div>
+                </div>
+
+                <!-- Results Summary Cards -->
+                <div class="results-summary">
+                    <div class="summary-card verdict-card">
+                        <div class="card-icon">⚖️</div>
+                        <div class="card-content">
+                            <h3>Verdict</h3>
+                            <div class="verdict-display" id="verdict-display">Unknown</div>
+                            <div class="verdict-confidence">Confidence: <span id="confidence-value">-</span></div>
+                        </div>
+                    </div>
+                    <div class="summary-card timing-card">
+                        <div class="card-icon">⏱️</div>
+                        <div class="card-content">
+                            <h3>Analysis Time</h3>
+                            <div class="timing-display" id="timing-display">-</div>
+                            <div class="timing-breakdown">Processing breakdown available</div>
+                        </div>
+                    </div>
+                    <div class="summary-card authenticity-card">
+                        <div class="card-icon">🎭</div>
+                        <div class="card-content">
+                            <h3>Audio Authenticity</h3>
+                            <div class="authenticity-display" id="authenticity-display">-</div>
+                            <div class="authenticity-details">Sarcasm & emotion analysis</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Claim Display -->
+                <div class="claim-section">
+                    <h2 class="section-title">📋 Analyzed Claim</h2>
+                    <div class="claim-card">
+                        <div class="claim-text" id="claim-display">No claim analyzed yet</div>
+                        <div class="claim-source" id="transcription-display" style="display: none;">
+                            <strong>Transcription:</strong> <span></span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Interactive Dashboard Tabs -->
+                <div class="dashboard-tabs">
+                    <div class="tab-navigation">
+                        <button class="tab-btn active" data-tab="timeline">📈 Timeline</button>
+                        <button class="tab-btn" data-tab="evidence">🔍 Evidence</button>
+                        <button class="tab-btn" data-tab="debate">⚔️ Debate View</button>
+                        <button class="tab-btn" data-tab="audio">🎵 Audio Analysis</button>
+                        <button class="tab-btn" data-tab="sources">📚 Sources</button>
+                    </div>
+
+                    <div class="tab-content">
+                        <!-- Timeline Tab -->
+                        <div class="tab-pane active" id="timeline-tab">
+                            <div class="timeline-container" id="timeline-container">
+                                <!-- Timeline will be populated here -->
+                            </div>
+                        </div>
+
+                        <!-- Evidence Tab -->
+                        <div class="tab-pane" id="evidence-tab">
+                            <div class="evidence-container" id="evidence-container">
+                                <!-- Evidence analysis will be populated here -->
+                            </div>
+                        </div>
+
+                        <!-- Debate View Tab -->
+                        <div class="tab-pane" id="debate-tab">
+                            <div class="debate-container" id="debate-container">
+                                <!-- Debate view will be populated here -->
+                            </div>
+                        </div>
+
+                        <!-- Audio Analysis Tab -->
+                        <div class="tab-pane" id="audio-tab">
+                            <div class="audio-analysis-container" id="audio-analysis-container">
+                                <!-- Audio analysis will be populated here -->
+                            </div>
+                        </div>
+
+                        <!-- Sources Tab -->
+                        <div class="tab-pane" id="sources-tab">
+                            <div class="sources-container" id="sources-container">
+                                <!-- Sources will be populated here -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Export & Share Section -->
+                <div class="export-section">
+                    <h2 class="section-title">📤 Share & Export</h2>
+                    <div class="export-actions">
+                        <button class="export-btn primary" id="share-infographic">
+                            <span class="btn-icon">📊</span>
+                            Generate Infographic
+                        </button>
+                        <button class="export-btn" id="export-pdf">
+                            <span class="btn-icon">📄</span>
+                            Export PDF Report
+                        </button>
+                        <button class="export-btn" id="export-json">
+                            <span class="btn-icon">📋</span>
+                            Export Data (JSON)
+                        </button>
+                        <button class="export-btn" id="share-social">
+                            <span class="btn-icon">🔗</span>
+                            Share to Social
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Screen 5: Settings -->
+        <section class="screen" id="settings-screen">
+            <div class="settings-container">
+                <div class="screen-header">
+                    <button class="back-btn" data-screen="welcome-screen">← Back</button>
+                    <h1 class="screen-title">Settings</h1>
+                </div>
+
+                <div class="settings-content">
+                    <div class="settings-section">
+                        <h2>🔌 API Configuration</h2>
+                        <div class="setting-item">
+                            <label for="backend-url">Backend API URL</label>
+                            <div class="input-group">
+                                <input type="url" id="backend-url" value="http://localhost:8000" placeholder="http://localhost:8000">
+                                <button class="test-btn" id="test-connection">Test</button>
+                            </div>
+                            <div class="connection-status" id="connection-status">Not tested</div>
+                        </div>
+                    </div>
+
+                    <div class="settings-section">
+                        <h2>🎛️ Analysis Preferences</h2>
+                        <div class="setting-item">
+                            <label class="switch-label">
+                                <input type="checkbox" id="auto-prosody" checked>
+                                <span class="switch"></span>
+                                Enable prosody analysis by default
+                            </label>
+                        </div>
+                        <div class="setting-item">
+                            <label class="switch-label">
+                                <input type="checkbox" id="auto-timeline" checked>
+                                <span class="switch"></span>
+                                Generate timeline visualizations
+                            </label>
+                        </div>
+                        <div class="setting-item">
+                            <label class="switch-label">
+                                <input type="checkbox" id="debate-mode" checked>
+                                <span class="switch"></span>
+                                Show debate-style analysis
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="settings-section">
+                        <h2>🎨 Interface</h2>
+                        <div class="setting-item">
+                            <label for="theme-select">Theme</label>
+                            <select id="theme-select">
+                                <option value="light">Light</option>
+                                <option value="dark">Dark</option>
+                                <option value="auto">Auto (System)</option>
+                            </select>
+                        </div>
+                        <div class="setting-item">
+                            <label class="switch-label">
+                                <input type="checkbox" id="animations" checked>
+                                <span class="switch"></span>
+                                Enable animations
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="settings-section">
+                        <h2>📊 Data & Privacy</h2>
+                        <div class="setting-item">
+                            <label class="switch-label">
+                                <input type="checkbox" id="save-history">
+                                <span class="switch"></span>
+                                Save analysis history locally
+                            </label>
+                        </div>
+                        <div class="setting-item">
+                            <button class="danger-btn" id="clear-data">Clear All Local Data</button>
+                            <p class="setting-description">This will remove all saved analyses and settings</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- Loading Overlay -->
+    <div class="loading-overlay" id="loading-overlay" style="display: none;">
+        <div class="loading-content">
+            <div class="loading-spinner"></div>
+            <h3>Processing...</h3>
+            <p id="loading-message">Please wait while we analyze your claim</p>
+        </div>
+    </div>
+
+    <!-- Error Modal -->
+    <div class="modal-overlay" id="error-modal" style="display: none;">
+        <div class="modal-content error-modal">
+            <div class="modal-header">
+                <h3>❌ Error</h3>
+                <button class="close-btn" id="close-error">×</button>
+            </div>
+            <div class="modal-body">
+                <p id="error-message">An error occurred</p>
+            </div>
+            <div class="modal-footer">
+                <button class="btn secondary" id="error-close">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Success Modal -->
+    <div class="modal-overlay" id="success-modal" style="display: none;">
+        <div class="modal-content success-modal">
+            <div class="modal-header">
+                <h3>✅ Success</h3>
+                <button class="close-btn" id="close-success">×</button>
+            </div>
+            <div class="modal-body">
+                <p id="success-message">Operation completed successfully</p>
+            </div>
+            <div class="modal-footer">
+                <button class="btn primary" id="success-close">OK</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="config.js"></script>
+    <script src="script.js"></script>
+</body>
+</html>

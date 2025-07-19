@@ -1,0 +1,95 @@
+version: '3.8'
+
+services:
+  # Backend API Service
+  backend:
+    build: 
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: debunker-backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - PYTHONPATH=/app
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - HUGGINGFACEHUB_API_TOKEN=${HUGGINGFACEHUB_API_TOKEN:-}
+      - LOG_LEVEL=INFO
+    volumes:
+      - ./backend/data:/app/data
+      - ./backend/logs:/app/logs
+      - backend_models:/app/models
+    networks:
+      - debunker-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Frontend Service
+  frontend:
+    build:
+      context: ./frontend-standalone
+      dockerfile: Dockerfile
+    container_name: debunker-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    networks:
+      - debunker-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # Redis for caching (optional)
+  redis:
+    image: redis:7-alpine
+    container_name: debunker-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - debunker-network
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+
+  # Nginx reverse proxy (optional)
+  nginx-proxy:
+    image: nginx:alpine
+    container_name: debunker-proxy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx-proxy.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - backend
+      - frontend
+    networks:
+      - debunker-network
+    profiles:
+      - production
+
+volumes:
+  backend_models:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  debunker-network:
+    driver: bridge
