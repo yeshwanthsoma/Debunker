@@ -134,3 +134,4 @@ backend/*.env
 *.pkl
 logs/
 temp_audio/
+backend/.env
