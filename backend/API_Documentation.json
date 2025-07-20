@@ -1,0 +1,250 @@
+{
+  "api_documentation": {
+    "base_url": "http://localhost:8080",
+    "endpoints": [
+      {
+        "endpoint": "/api/analyze",
+        "method": "POST",
+        "content_type": "application/json",
+        "description": "Analyze a claim with optional base64 audio data",
+        "request": {
+          "headers": {
+            "Content-Type": "application/json"
+          },
+          "body": {
+            "text_claim": "string (required) - The claim to fact-check",
+            "audio_data": "string (optional) - Base64 encoded audio data",
+            "enable_prosody": "boolean (optional, default: true) - Enable prosody analysis for audio"
+          }
+        },
+        "example_request": {
+          "text_claim": "The COVID-19 vaccines are safe and effective",
+          "audio_data": null,
+          "enable_prosody": false
+        },
+        "response": {
+          "transcription": "string - Audio transcription (empty if no audio)",
+          "claim": "string - The extracted or provided claim",
+          "verdict": "string - One of: 'True', 'False', 'Misleading', 'Unverifiable'",
+          "confidence": "number - Confidence level (0.0 to 1.0)",
+          "explanation": "string - Detailed explanation of the verdict",
+          "evidence": {
+            "primary_claims": "array of strings - Main factual claims extracted",
+            "claim_evaluations": "object - Individual claim evaluations",
+            "web_sources_consulted": "array of strings - Web sources used",
+            "reasoning": "string - Logical reasoning for verdict"
+          },
+          "sources": [
+            {
+              "name": "string - Source name",
+              "type": "string - Source type (Web Source, AI Analysis, etc.)",
+              "url": "string or null - Source URL if available",
+              "rating": "string or null - Source rating or credibility"
+            }
+          ],
+          "prosody": {
+            "sarcasm_probability": "number - Probability of sarcasm (0-1)",
+            "pitch_mean": "number - Average pitch in Hz",
+            "pitch_std": "number - Pitch standard deviation",
+            "energy_mean": "number - Average energy level",
+            "speaking_rate": "number - Speaking rate",
+            "tempo": "number - Tempo in BPM"
+          },
+          "credibility_metrics": {
+            "language_quality": "number - Quality of language (0-1)",
+            "audio_authenticity": "number - Audio authenticity score (0-1)",
+            "source_reliability": "number - Reliability of sources (0-1)",
+            "factual_accuracy": "number - Factual accuracy score (0-1)",
+            "flags": "array of strings - Credibility warning flags"
+          },
+          "debate_content": {
+            "supporting_arguments": "array of strings - Arguments supporting the claim",
+            "opposing_arguments": "array of strings - Arguments opposing the claim",
+            "expert_opinions": "array of objects - Expert opinions and quotes",
+            "historical_context": "string - Historical background",
+            "scientific_consensus": "string - Current scientific consensus"
+          },
+          "provider": "string - Fact-checking provider used",
+          "processing_time": "number - Processing time in seconds",
+          "timestamp": "string - Analysis timestamp (ISO format)"
+        }
+      },
+      {
+        "endpoint": "/api/analyze-file",
+        "method": "POST",
+        "content_type": "multipart/form-data",
+        "description": "Analyze a claim with file upload support",
+        "request": {
+          "headers": {
+            "Content-Type": "multipart/form-data"
+          },
+          "form_data": {
+            "audio_file": "file (required) - Audio file to analyze (.wav, .mp3, .m4a, etc.)",
+            "text_claim": "string (optional) - Optional text claim to fact-check",
+            "enable_prosody": "boolean (optional, default: true) - Enable prosody analysis"
+          }
+        },
+        "supported_audio_formats": [
+          ".wav", ".mp3", ".m4a", ".flac", ".ogg", ".aac"
+        ],
+        "response": {
+          "transcription": "string - Audio transcription (empty if no audio)",
+          "claim": "string - The extracted or provided claim",
+          "verdict": "string - One of: 'True', 'False', 'Misleading', 'Unverifiable'",
+          "confidence": "number - Confidence level (0.0 to 1.0)",
+          "explanation": "string - Detailed explanation of the verdict",
+          "evidence": {
+            "primary_claims": "array of strings - Main factual claims extracted",
+            "claim_evaluations": "object - Individual claim evaluations",
+            "web_sources_consulted": "array of strings - Web sources used",
+            "reasoning": "string - Logical reasoning for verdict"
+          },
+          "sources": [
+            {
+              "name": "string - Source name",
+              "type": "string - Source type (Web Source, AI Analysis, etc.)",
+              "url": "string or null - Source URL if available",
+              "rating": "string or null - Source rating or credibility"
+            }
+          ],
+          "prosody": {
+            "sarcasm_probability": "number - Probability of sarcasm (0-1)",
+            "pitch_mean": "number - Average pitch in Hz",
+            "pitch_std": "number - Pitch standard deviation",
+            "energy_mean": "number - Average energy level",
+            "speaking_rate": "number - Speaking rate",
+            "tempo": "number - Tempo in BPM"
+          },
+          "credibility_metrics": {
+            "language_quality": "number - Quality of language (0-1)",
+            "audio_authenticity": "number - Audio authenticity score (0-1)",
+            "source_reliability": "number - Reliability of sources (0-1)",
+            "factual_accuracy": "number - Factual accuracy score (0-1)",
+            "flags": "array of strings - Credibility warning flags"
+          },
+          "debate_content": {
+            "supporting_arguments": "array of strings - Arguments supporting the claim",
+            "opposing_arguments": "array of strings - Arguments opposing the claim",
+            "expert_opinions": "array of objects - Expert opinions and quotes",
+            "historical_context": "string - Historical background",
+            "scientific_consensus": "string - Current scientific consensus"
+          },
+          "provider": "string - Fact-checking provider used",
+          "processing_time": "number - Processing time in seconds",
+          "timestamp": "string - Analysis timestamp (ISO format)"
+        }
+      },
+      {
+        "endpoint": "/health",
+        "method": "GET",
+        "description": "Health check endpoint",
+        "response": {
+          "status": "string - 'healthy'",
+          "fact_checker_ready": "boolean - Whether fact checker is initialized",
+          "timestamp": "number - Unix timestamp"
+        }
+      },
+      {
+        "endpoint": "/api/status",
+        "method": "GET",
+        "description": "Get detailed API status and configuration",
+        "response": {
+          "version": "string - API version",
+          "basic_features": {
+            "audio_transcription": "boolean",
+            "prosody_analysis": "boolean", 
+            "sentiment_analysis": "boolean",
+            "simple_fact_checking": "boolean"
+          },
+          "professional_apis": {
+            "google_fact_check": "boolean",
+            "openai": "boolean",
+            "anthropic": "boolean",
+            "news_api": "boolean"
+          },
+          "recommendations": "array of strings - Setup recommendations"
+        }
+      }
+    ],
+    "example_responses": {
+      "successful_analysis": {
+        "transcription": "",
+        "claim": "The COVID-19 vaccines are safe and effective",
+        "verdict": "True",
+        "confidence": 0.78,
+        "explanation": "[OpenAI gpt-4o] The COVID-19 vaccines have been shown to be safe and effective in numerous studies...",
+        "evidence": {
+          "primary_claims": ["The COVID-19 vaccines are safe and effective"],
+          "claim_evaluations": {
+            "The COVID-19 vaccines are safe and effective": "True"
+          },
+          "web_sources_consulted": [
+            "https://www.cdc.gov/coronavirus/2019-ncov/vaccines/safety.html",
+            "https://www.who.int/news-room/feature-stories/detail/safety-of-covid-19-vaccines"
+          ],
+          "reasoning": "Weighted analysis: AI results (1) + Google results (19) = True"
+        },
+        "sources": [
+          {
+            "name": "https://www.cdc.gov/coronavirus/2019-ncov/vaccines/safety.html",
+            "type": "Web Source",
+            "url": "https://www.cdc.gov/coronavirus/2019-ncov/vaccines/safety.html",
+            "rating": null
+          },
+          {
+            "name": "OpenAI gpt-4o Analysis",
+            "type": "AI Analysis with Internet Access",
+            "url": null,
+            "rating": null
+          }
+        ],
+        "prosody": null,
+        "credibility_metrics": {
+          "language_quality": 0.5,
+          "audio_authenticity": 0.5,
+          "source_reliability": 0.8,
+          "factual_accuracy": 0.78,
+          "flags": []
+        },
+        "debate_content": null,
+        "provider": "Multi-Source Analysis",
+        "processing_time": 8.88,
+        "timestamp": "2025-07-20T03:33:01.882066"
+      },
+      "error_response": {
+        "detail": "string - Error message describing what went wrong"
+      }
+    },
+    "status_codes": {
+      "200": "Success - Analysis completed",
+      "400": "Bad Request - Invalid input (missing claim, invalid audio, etc.)",
+      "500": "Internal Server Error - Processing failed",
+      "503": "Service Unavailable - Fact checker not initialized"
+    },
+    "implementation_notes": {
+      "audio_encoding": "For /api/analyze endpoint, audio should be base64 encoded",
+      "file_upload": "For /api/analyze-file endpoint, use standard multipart form upload",
+      "timeout": "Requests may take 5-45 seconds depending on audio length and API availability",
+      "rate_limiting": "No rate limiting currently implemented",
+      "authentication": "No authentication required (development mode)",
+      "cors": "CORS enabled for all origins (configure for production)"
+    },
+    "frontend_integration_tips": {
+      "file_upload": {
+        "javascript_example": "Use FormData() object with audio file and form fields",
+        "recommended_ui": "Show upload progress and processing status to user",
+        "error_handling": "Display meaningful error messages for file format/size issues"
+      },
+      "audio_recording": {
+        "browser_recording": "Use MediaRecorder API to capture audio, then upload via /api/analyze-file",
+        "format_conversion": "Browser typically records as webm/ogg, convert to wav/mp3 if needed"
+      },
+      "response_handling": {
+        "verdict_display": "Use color coding: Green=True, Red=False, Yellow=Misleading, Gray=Unverifiable",
+        "confidence_visualization": "Show confidence as percentage or progress bar",
+        "source_links": "Make sources clickable when URL is provided",
+        "timing": "Show processing time to set user expectations"
+      }
+    }
+  }
+}
