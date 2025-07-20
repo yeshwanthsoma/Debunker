@@ -120,3 +120,17 @@ cython_debug/
 
 # macOS
 .DS_Store
+
+# Environment variables and secrets
+.env
+*.env
+.env.local
+.env.production
+backend/.env
+backend/*.env
+
+# TruthLens specific
+*.faiss
+*.pkl
+logs/
+temp_audio/

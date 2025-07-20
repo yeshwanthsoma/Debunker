@@ -6,7 +6,7 @@
 const CONFIG = {
     // Backend API configuration
     api: {
-        baseUrl: 'http://localhost:8000',
+        baseUrl: 'http://localhost:8080',
         endpoints: {
             analyze: '/api/analyze',
             analyzeFile: '/api/analyze-file',
@@ -62,7 +62,7 @@ const CONFIG = {
 // Environment-specific overrides
 if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
     // Development environment
-    CONFIG.api.baseUrl = 'http://localhost:8000';
+    CONFIG.api.baseUrl = 'http://localhost:8080';
 } else if (window.location.hostname.includes('staging')) {
     // Staging environment
     CONFIG.api.baseUrl = 'https://staging-api.debunker.example.com';

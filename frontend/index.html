@@ -50,9 +50,9 @@
             <div class="tabs">
                 <div class="tab-buttons">
                     <button class="tab-btn active" data-tab="summary">Summary</button>
-                    <button class="tab-btn" data-tab="full-analysis">Full Analysis</button>
-                    <button class="tab-btn" data-tab="timeline">Timeline</button>
-                    <button class="tab-btn" data-tab="credibility-radar">Credibility Radar</button>
+                    <button class="tab-btn" data-tab="evidence">Evidence</button>
+                    <button class="tab-btn" data-tab="debate">Debate</button>
+                    <button class="tab-btn" data-tab="credibility-radar">Credibility</button>
                     <button class="tab-btn" data-tab="audio-analysis">Audio Analysis</button>
                     <button class="tab-btn" data-tab="sources">Sources</button>
                 </div>
@@ -60,52 +60,142 @@
                 <div class="tab-content">
                     <div id="summary" class="tab-pane active">
                         <h3>Summary</h3>
-                        <div class="result-card">
-                            <h4>Transcription</h4>
-                            <p id="transcription-output" class="output-text">No transcription available yet</p>
-                        </div>
-                        <div class="result-card">
-                            <h4>Confidence Level</h4>
-                            <p id="confidence-output" class="output-text">No confidence data available yet</p>
+                        <div class="result-card verdict-card">
+                            <h4>Verdict</h4>
+                            <div class="verdict-display">
+                                <span id="verdict-output" class="verdict-badge">Analyzing...</span>
+                                <span id="confidence-output" class="confidence-score">0%</span>
+                            </div>
                         </div>
                         <div class="result-card">
                             <h4>Extracted Claim</h4>
                             <p id="claim-output" class="output-text">No claim extracted yet</p>
                         </div>
-                    </div>
-                    
-                    <div id="full-analysis" class="tab-pane">
-                        <h3>Full Analysis</h3>
                         <div class="result-card">
-                            <div id="analysis-output" class="output-text">No analysis available yet</div>
+                            <h4>Explanation</h4>
+                            <p id="explanation-output" class="output-text">No explanation available yet</p>
+                        </div>
+                        <div class="result-card">
+                            <h4>Transcription</h4>
+                            <p id="transcription-output" class="output-text">No transcription available yet</p>
                         </div>
                     </div>
                     
-                    <div id="timeline" class="tab-pane">
-                        <h3>Timeline</h3>
+                    <div id="evidence" class="tab-pane">
+                        <h3>Evidence Summary</h3>
                         <div class="result-card">
-                            <div id="timeline-output">No timeline available yet</div>
+                            <h4>Primary Claims Identified</h4>
+                            <div id="primary-claims-output" class="claims-list">No claims extracted yet</div>
+                        </div>
+                        <div class="result-card">
+                            <h4>Claim Evaluations</h4>
+                            <div id="claim-evaluations-output" class="evaluations-list">No evaluations available yet</div>
+                        </div>
+                        <div class="result-card">
+                            <h4>Research Sources Consulted</h4>
+                            <div id="web-sources-output" class="sources-list">No web sources available yet</div>
+                        </div>
+                        <div class="result-card">
+                            <h4>Reasoning</h4>
+                            <p id="reasoning-output" class="output-text">No reasoning available yet</p>
+                        </div>
+                    </div>
+                    
+                    <div id="debate" class="tab-pane">
+                        <h3>Debate Analysis</h3>
+                        <div class="debate-container">
+                            <div class="result-card">
+                                <h4>Supporting Arguments</h4>
+                                <div id="supporting-args-output" class="arguments-list">No supporting arguments yet</div>
+                            </div>
+                            <div class="result-card">
+                                <h4>Opposing Arguments</h4>
+                                <div id="opposing-args-output" class="arguments-list">No opposing arguments yet</div>
+                            </div>
+                            <div class="result-card">
+                                <h4>Expert Opinions</h4>
+                                <div id="expert-opinions-output" class="experts-list">No expert opinions yet</div>
+                            </div>
+                            <div class="result-card">
+                                <h4>Historical Context</h4>
+                                <p id="historical-context-output" class="output-text">No historical context yet</p>
+                            </div>
+                            <div class="result-card">
+                                <h4>Scientific Consensus</h4>
+                                <p id="scientific-consensus-output" class="output-text">No scientific consensus yet</p>
+                            </div>
                         </div>
                     </div>
                     
                     <div id="credibility-radar" class="tab-pane">
-                        <h3>Credibility Radar</h3>
+                        <h3>Credibility Assessment</h3>
+                        <div class="credibility-grid">
+                            <div class="result-card">
+                                <h4>Language Quality</h4>
+                                <div class="metric-bar">
+                                    <div id="language-quality-bar" class="metric-fill" style="width: 0%"></div>
+                                    <span id="language-quality-text">0%</span>
+                                </div>
+                            </div>
+                            <div class="result-card">
+                                <h4>Audio Authenticity</h4>
+                                <div class="metric-bar">
+                                    <div id="audio-authenticity-bar" class="metric-fill" style="width: 0%"></div>
+                                    <span id="audio-authenticity-text">0%</span>
+                                </div>
+                            </div>
+                            <div class="result-card">
+                                <h4>Source Reliability</h4>
+                                <div class="metric-bar">
+                                    <div id="source-reliability-bar" class="metric-fill" style="width: 0%"></div>
+                                    <span id="source-reliability-text">0%</span>
+                                </div>
+                            </div>
+                            <div class="result-card">
+                                <h4>Factual Accuracy</h4>
+                                <div class="metric-bar">
+                                    <div id="factual-accuracy-bar" class="metric-fill" style="width: 0%"></div>
+                                    <span id="factual-accuracy-text">0%</span>
+                                </div>
+                            </div>
+                        </div>
                         <div class="result-card">
-                            <div id="credibility-output">No credibility data available yet</div>
+                            <h4>Warning Flags</h4>
+                            <div id="warning-flags-output" class="flags-list">No flags detected</div>
                         </div>
                     </div>
                     
                     <div id="audio-analysis" class="tab-pane">
                         <h3>Audio Analysis</h3>
-                        <div class="result-card">
-                            <div id="prosody-output" class="output-text">No audio analysis available yet</div>
+                        <div id="prosody-container" class="prosody-grid">
+                            <div class="result-card">
+                                <h4>Sarcasm Detection</h4>
+                                <div class="sarcasm-indicator">
+                                    <span id="sarcasm-probability" class="sarcasm-score">0%</span>
+                                    <span class="sarcasm-label">Probability</span>
+                                </div>
+                            </div>
+                            <div class="result-card">
+                                <h4>Voice Characteristics</h4>
+                                <div class="voice-metrics">
+                                    <p>Pitch: <span id="pitch-mean">0</span> Hz (±<span id="pitch-std">0</span>)</p>
+                                    <p>Energy: <span id="energy-mean">0</span></p>
+                                    <p>Speaking Rate: <span id="speaking-rate">0</span> beats/sec</p>
+                                    <p>Tempo: <span id="tempo">0</span> BPM</p>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="result-card" id="no-audio-message" style="display: none;">
+                            <p class="output-text">No audio analysis available - text input only</p>
                         </div>
                     </div>
                     
                     <div id="sources" class="tab-pane">
-                        <h3>Sources</h3>
-                        <div class="result-card">
-                            <div id="sources-output" class="output-text">No sources available yet</div>
+                        <h3>Sources & References</h3>
+                        <div id="sources-container" class="sources-container">
+                            <div class="result-card">
+                                <div id="sources-output" class="sources-list">No sources available yet</div>
+                            </div>
                         </div>
                     </div>
                 </div>

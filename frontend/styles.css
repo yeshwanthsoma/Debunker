@@ -676,3 +676,166 @@ footer::before {
         padding: 1.5rem;
     }
 }
+
+/* New styles for updated frontend structure */
+
+/* Verdict display styling */
+.verdict-display {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    margin: 10px 0;
+}
+
+.verdict-badge {
+    padding: 8px 16px;
+    border-radius: 20px;
+    font-weight: 600;
+    font-size: 16px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.verdict-true { background: #4CAF50; color: white; }
+.verdict-false { background: #F44336; color: white; }
+.verdict-misleading { background: #FF9800; color: white; }
+.verdict-unverifiable { background: #9E9E9E; color: white; }
+
+.confidence-score {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--primary-color);
+}
+
+/* Evidence tab styling */
+.claims-list ul, .evaluations-list, .sources-list ul {
+    list-style: none;
+    padding: 0;
+}
+
+.claims-list li, .sources-list li {
+    background: #f8f9fa;
+    margin: 8px 0;
+    padding: 12px;
+    border-radius: 8px;
+    border-left: 4px solid var(--primary-color);
+}
+
+.evaluation-item {
+    background: #f8f9fa;
+    margin: 8px 0;
+    padding: 12px;
+    border-radius: 8px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.status-true { color: #4CAF50; font-weight: 600; }
+.status-false { color: #F44336; font-weight: 600; }
+.status-unclear { color: #FF9800; font-weight: 600; }
+
+/* Debate tab styling */
+.debate-container {
+    display: grid;
+    gap: 20px;
+}
+
+.arguments-list ul {
+    list-style: none;
+    padding: 0;
+}
+
+.arguments-list li {
+    background: #f0f7ff;
+    margin: 8px 0;
+    padding: 12px;
+    border-radius: 8px;
+    border-left: 4px solid var(--accent-color);
+    line-height: 1.5;
+}
+
+.expert-opinion {
+    background: #f8f4ff;
+    margin: 8px 0;
+    padding: 12px;
+    border-radius: 8px;
+    border-left: 4px solid var(--primary-color);
+}
+
+.expert-opinion strong {
+    color: var(--primary-dark);
+}
+
+/* Credibility metrics styling */
+.credibility-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: 15px;
+    margin-bottom: 20px;
+}
+
+.metric-bar {
+    background: #e0e0e0;
+    border-radius: 10px;
+    height: 24px;
+    position: relative;
+    overflow: hidden;
+    margin: 8px 0;
+}
+
+.metric-fill {
+    height: 100%;
+    border-radius: 10px;
+    transition: width 0.5s ease;
+    display: flex;
+    align-items: center;
+    padding-left: 8px;
+    color: white;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.metric-good { background: #4CAF50; }
+.metric-medium { background: #FF9800; }
+.metric-poor { background: #F44336; }
+
+/* Audio analysis styling */
+.prosody-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: 20px;
+}
+
+.sarcasm-indicator {
+    text-align: center;
+    padding: 20px;
+}
+
+.sarcasm-score {
+    display: block;
+    font-size: 36px;
+    font-weight: 700;
+    color: var(--secondary-color);
+    line-height: 1;
+}
+
+.voice-metrics span {
+    font-weight: 600;
+    color: var(--primary-color);
+}
+
+/* Sources styling */
+.source-item {
+    background: #f8f9fa;
+    margin: 12px 0;
+    padding: 16px;
+    border-radius: 8px;
+    border-left: 4px solid var(--accent-color);
+}
+
+.source-item h5 {
+    margin: 0 0 8px 0;
+    color: var(--primary-dark);
+}
+
