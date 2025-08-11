@@ -85,9 +85,16 @@ app.add_middleware(SlowAPIMiddleware)
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Configure this properly for production
+    allow_origins=[
+        "https://audio-debunker-r09durifd-yeshwanth-somas-projects.vercel.app",
+        "https://*.vercel.app",  # Allow all Vercel domains
+        "http://localhost:3000",
+        "http://localhost:5173",
+        "http://localhost:8080",
+        "*"  # Fallback for development
+    ],
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 
