@@ -6,6 +6,8 @@
     "ghcr.io/devcontainers/features/common-utils:2": {},
     "ghcr.io/devcontainers/features/git:1": {}
   },
+  
+  "postAttachCommand": "sudo apt update && sudo apt install -y ffmpeg",
 
   "postCreateCommand": "pip install -r backend/requirements.txt",
   
