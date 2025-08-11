@@ -9,9 +9,14 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Depends
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import Optional, Dict, List
 import asyncio
 import logging
@@ -24,14 +29,16 @@ import json
 import numpy as np
 import librosa
 import re
+import aiohttp
 from transformers import pipeline
 from sentence_transformers import SentenceTransformer
 import plotly.graph_objects as go
 import requests
-from config import get_settings, is_api_available
+from contextlib import asynccontextmanager
+from config import get_settings, is_api_available, get_api_key
 from fact_check_apis import MultiSourceFactChecker
 from models import (
-    AnalysisRequest, AnalysisResponse, ProsodyAnalysis, SourceInfo,
+    AnalysisResponse, ProsodyAnalysis, SourceInfo,
     EvidenceAssessment, DebateContent, CredibilityMetrics, ExpertOpinion,
     ErrorResponse, HealthResponse, StatsResponse
 )
@@ -51,12 +58,29 @@ logger = logging.getLogger(__name__)
 # Request tracking
 request_counter = 0
 
-# Initialize FastAPI app
+# Initialize rate limiter
+limiter = Limiter(key_func=get_remote_address)
+
+# Initialize FastAPI app with lifespan
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    await startup_event()
+    yield
+    # Shutdown
+    await shutdown_event()
+
 app = FastAPI(
     title="TruthLens - Professional Fact-Checking API",
     description="Advanced AI-powered fact-checking with Google Fact Check Tools API, OpenAI integration, and audio analysis",
-    version="3.0.0"
+    version="3.0.1",
+    lifespan=lifespan
 )
+
+# Add rate limiting middleware
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
 
 # Configure CORS
 app.add_middleware(
@@ -67,60 +91,38 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Pydantic models
+# Enhanced AnalysisRequest with input validation
 class AnalysisRequest(BaseModel):
     text_claim: str = Field(..., description="The claim to analyze")
     audio_data: Optional[str] = Field(None, description="Base64 encoded audio data")
     enable_prosody: bool = Field(True, description="Enable prosody analysis for audio")
-
-class ProsodyAnalysis(BaseModel):
-    sarcasm_probability: float = Field(0.0, description="Probability of sarcasm (0-1)")
-    pitch_mean: float = Field(0.0, description="Average pitch in Hz")
-    pitch_std: float = Field(0.0, description="Pitch standard deviation")
-    energy_mean: float = Field(0.0, description="Average energy level")
-    speaking_rate: float = Field(0.0, description="Speaking rate in beats/second")
-    tempo: float = Field(0.0, description="Tempo in BPM")
-
-class SourceInfo(BaseModel):
-    name: str = Field("", description="Source name")
-    type: str = Field("", description="Source type (Web Source, AI Analysis, etc.)")
-    url: Optional[str] = Field(None, description="Source URL if available")
-    rating: Optional[str] = Field(None, description="Source rating or credibility")
-
-class EvidenceAssessment(BaseModel):
-    primary_claims: List[str] = Field([], description="Primary factual claims extracted")
-    claim_evaluations: Dict[str, str] = Field({}, description="Individual claim evaluations")
-    web_sources_consulted: List[str] = Field([], description="Web sources used in research")
-    reasoning: str = Field("", description="Logical reasoning for verdict")
     
-class DebateContent(BaseModel):
-    supporting_arguments: List[str] = Field([], description="Arguments supporting the claim")
-    opposing_arguments: List[str] = Field([], description="Arguments opposing the claim") 
-    expert_opinions: List[Dict[str, str]] = Field([], description="Expert opinions and quotes")
-    historical_context: str = Field("", description="Historical context of the claim")
-    scientific_consensus: str = Field("", description="Current scientific consensus")
-
-class CredibilityMetrics(BaseModel):
-    language_quality: float = Field(0.5, description="Quality of language used (0-1)")
-    audio_authenticity: float = Field(0.5, description="Audio authenticity score (0-1)")
-    source_reliability: float = Field(0.5, description="Reliability of sources (0-1)")
-    factual_accuracy: float = Field(0.5, description="Factual accuracy score (0-1)")
-    flags: List[str] = Field([], description="Credibility warning flags")
-
-class AnalysisResponse(BaseModel):
-    transcription: str = Field("", description="Audio transcription")
-    claim: str = Field("", description="Extracted or provided claim")
-    verdict: str = Field("", description="Fact-check verdict (True/False/Misleading/Unverifiable)")
-    confidence: float = Field(0.0, description="Confidence level (0-1)")
-    explanation: str = Field("", description="Detailed explanation of the verdict")
-    evidence: EvidenceAssessment = Field(default_factory=EvidenceAssessment, description="Evidence assessment details")
-    sources: List[SourceInfo] = Field([], description="Sources used in fact-checking")
-    prosody: Optional[ProsodyAnalysis] = Field(None, description="Audio prosody analysis")
-    credibility_metrics: CredibilityMetrics = Field(default_factory=CredibilityMetrics, description="Credibility assessment")
-    debate_content: Optional[DebateContent] = Field(None, description="Debate and discussion content")
-    provider: str = Field("", description="Fact-checking provider used")
-    processing_time: float = Field(0.0, description="Processing time in seconds")
-    timestamp: str = Field("", description="Analysis timestamp")
+    @field_validator('text_claim')
+    @classmethod
+    def validate_text_claim(cls, v):
+        # Allow empty text_claim - will be validated in model_validator
+        if v and len(v.strip()) > 10000:
+            raise ValueError('Text claim is too long (maximum 10,000 characters)')
+        return v.strip() if v else ""
+    
+    @model_validator(mode='after')
+    def validate_claim_or_audio(self):
+        # Require either text_claim or audio_data to be provided
+        if not self.text_claim and not self.audio_data:
+            raise ValueError('Either text_claim or audio_data must be provided')
+        
+        # If text_claim is provided, validate its length
+        if self.text_claim and len(self.text_claim) < 3:
+            raise ValueError('Text claim must be at least 3 characters long')
+        
+        return self
+    
+    @field_validator('audio_data')
+    @classmethod
+    def validate_audio_data(cls, v):
+        if v and len(v) > 50 * 1024 * 1024:  # 50MB limit
+            raise ValueError('Audio data is too large (maximum 50MB)')
+        return v
 
 # Global variables for models
 fact_checker = None
@@ -364,7 +366,6 @@ class AlternativeFactChecker:
             logger.info("Falling back to simple fact-checking method")
             return self.enhanced_fact_check(claim, prosody_features)
 
-@app.on_event("startup")
 async def startup_event():
     """Initialize the fact checker on startup"""
     global fact_checker, multi_source_checker
@@ -424,7 +425,6 @@ async def startup_event():
         logger.error(f"Stack trace: {traceback.format_exc()}")
         raise
 
-@app.on_event("shutdown")
 async def shutdown_event():
     """Clean up on shutdown"""
     global multi_source_checker
@@ -458,7 +458,8 @@ async def health_check():
     }
 
 @app.post("/api/analyze", response_model=AnalysisResponse)
-async def analyze_claim(request: AnalysisRequest):
+@limiter.limit("30/minute")
+async def analyze_claim(request: Request, analysis_request: AnalysisRequest):
     """Analyze a claim for fact-checking"""
     global request_counter
     request_counter += 1
@@ -469,9 +470,9 @@ async def analyze_claim(request: AnalysisRequest):
     
     logger.info("=" * 80)
     logger.info(f"🎯 NEW FACT-CHECK REQUEST [{request_id}]")
-    logger.info(f"📝 Claim: '{request.text_claim[:100]}{'...' if len(request.text_claim) > 100 else ''}'")
-    logger.info(f"🎤 Audio Data: {'Yes' if request.audio_data else 'No'}")
-    logger.info(f"🎵 Prosody Analysis: {'Enabled' if request.enable_prosody else 'Disabled'}")
+    logger.info(f"📝 Claim: '{analysis_request.text_claim[:100]}{'...' if len(analysis_request.text_claim) > 100 else ''}'")
+    logger.info(f"🎤 Audio Data: {'Yes' if analysis_request.audio_data else 'No'}")
+    logger.info(f"🎵 Prosody Analysis: {'Enabled' if analysis_request.enable_prosody else 'Disabled'}")
     logger.info(f"🔌 Professional APIs: {'Available' if multi_source_checker else 'Not Available'}")
     
     start_time = time.time()
@@ -483,9 +484,9 @@ async def analyze_claim(request: AnalysisRequest):
         transcription = ""
         prosody_features = {}
         
-        if request.audio_data:
+        if analysis_request.audio_data:
             logger.info(f"🎤 [{request_id}] STAGE 1: Processing audio data...")
-            audio_file = await process_audio_data(request.audio_data)
+            audio_file = await process_audio_data(analysis_request.audio_data)
             stage_times["audio_processed"] = time.time()
             logger.debug(f"   Audio file saved: {audio_file}")
             
@@ -497,7 +498,7 @@ async def analyze_claim(request: AnalysisRequest):
             logger.info(f"   Transcription: '{transcription[:100]}{'...' if len(transcription) > 100 else ''}'")
             
             # Prosody analysis
-            if request.enable_prosody:
+            if analysis_request.enable_prosody:
                 logger.info(f"🎵 [{request_id}] STAGE 3: Analyzing prosody features...")
                 prosody_features = fact_checker.extract_advanced_prosody(audio_file)
                 stage_times["prosody_done"] = time.time()
@@ -507,14 +508,21 @@ async def analyze_claim(request: AnalysisRequest):
             logger.info(f"📝 [{request_id}] No audio data provided, using text claim only")
         
         # Stage 4: Claim Extraction
-        claim = request.text_claim.strip()
+        claim = analysis_request.text_claim.strip()
         if not claim and transcription:
             claim = transcription.strip()
             logger.info(f"📋 [{request_id}] Using transcribed claim")
         
         if not claim:
             logger.error(f"❌ [{request_id}] No clear claim found")
-            raise HTTPException(status_code=400, detail="No clear claim found")
+            raise HTTPException(
+                status_code=400, 
+                detail={
+                    "error": "Invalid Input",
+                    "message": "No clear claim found to analyze. Please provide a text claim or upload audio containing a factual statement.",
+                    "suggestion": "Try phrases like 'The Earth is flat' or 'Vaccines cause autism' for testing."
+                }
+            )
         
         logger.info(f"📋 [{request_id}] Final claim: '{claim[:100]}{'...' if len(claim) > 100 else ''}'")
         
@@ -710,6 +718,8 @@ async def analyze_claim(request: AnalysisRequest):
         
         return result
         
+    except HTTPException:
+        raise  # Re-raise HTTP exceptions as-is
     except Exception as e:
         error_time = time.time() - start_time
         logger.error(f"💥 [{request_id}] ANALYSIS FAILED after {error_time:.2f}s")
@@ -719,10 +729,39 @@ async def analyze_claim(request: AnalysisRequest):
             if line.strip():
                 logger.error(f"     {line}")
         logger.info("=" * 80)
-        raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
+        
+        # Provide user-friendly error messages
+        if "timeout" in str(e).lower():
+            raise HTTPException(
+                status_code=408, 
+                detail={
+                    "error": "Request Timeout",
+                    "message": "The analysis took too long to complete. This may be due to high server load or complex audio processing.",
+                    "suggestion": "Please try again with a shorter audio clip or simpler text claim."
+                }
+            )
+        elif "api" in str(e).lower() or "key" in str(e).lower():
+            raise HTTPException(
+                status_code=503, 
+                detail={
+                    "error": "Service Unavailable",
+                    "message": "External fact-checking services are temporarily unavailable. The system will use basic fact-checking instead.",
+                    "suggestion": "Please try again later for enhanced verification."
+                }
+            )
+        else:
+            raise HTTPException(
+                status_code=500, 
+                detail={
+                    "error": "Analysis Error",
+                    "message": "An unexpected error occurred during analysis. Our team has been notified.",
+                    "suggestion": "Please try again or contact support if the issue persists."
+                }
+            )
 
 @app.post("/api/analyze-file", summary="Analyze Claim with File Upload")
 async def analyze_claim_with_file(
+    request: Request,
     audio_file: UploadFile = File(..., description="Audio file to analyze"),
     text_claim: str = Form("", description="Optional text claim to fact-check"),
     enable_prosody: bool = Form(True, description="Enable prosody analysis")
@@ -743,13 +782,13 @@ async def analyze_claim_with_file(
         with open(audio_file_path, 'rb') as f:
             audio_data = base64.b64encode(f.read()).decode('utf-8')
         
-        request = AnalysisRequest(
+        analysis_request = AnalysisRequest(
             text_claim=text_claim or "",
             audio_data=audio_data,
             enable_prosody=enable_prosody
         )
         
-        result = await analyze_claim(request)
+        result = await analyze_claim(request, analysis_request)
         
         # Clean up temporary file
         if audio_file_path and os.path.exists(audio_file_path):
@@ -762,18 +801,39 @@ async def analyze_claim_with_file(
         raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
 
 async def process_audio_data(audio_data: str) -> str:
-    """Process base64 audio data and return file path"""
+    """Process base64 audio data and return file path with timeout"""
     import base64
     
     try:
-        audio_bytes = base64.b64decode(audio_data)
+        # Add timeout for audio processing
+        async def _process_audio():
+            audio_bytes = base64.b64decode(audio_data)
+            
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as temp_file:
+                temp_file.write(audio_bytes)
+                return temp_file.name
         
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as temp_file:
-            temp_file.write(audio_bytes)
-            return temp_file.name
+        return await asyncio.wait_for(_process_audio(), timeout=30.0)
+        
+    except asyncio.TimeoutError:
+        raise HTTPException(
+            status_code=408, 
+            detail={
+                "error": "Audio Processing Timeout",
+                "message": "Audio processing took too long to complete.",
+                "suggestion": "Please try with a smaller audio file (under 10MB)."
+            }
+        )
     except Exception as e:
         logger.error(f"Error processing audio data: {e}")
-        raise HTTPException(status_code=400, detail="Invalid audio data")
+        raise HTTPException(
+            status_code=400, 
+            detail={
+                "error": "Invalid Audio Data",
+                "message": "The provided audio data could not be processed. Please ensure it's valid base64-encoded audio.",
+                "suggestion": "Supported formats: WAV, MP3, M4A, OGG"
+            }
+        )
 
 async def save_uploaded_file(audio_file: UploadFile) -> str:
     """Save uploaded file and return path"""
@@ -913,10 +973,192 @@ async def get_stats():
         "total_requests": len(request_cache),
         "cache_size": len(request_cache),
         "uptime": time.time(),
-        "version": "3.0.0-professional",
+        "version": "3.0.1-enhanced",
         "apis_available": {
             "google_fact_check": multi_source_checker is not None,
             "openai": multi_source_checker is not None
+        }
+    }
+
+@app.get("/docs-api")
+async def get_api_documentation():
+    """Get comprehensive API documentation"""
+    return {
+        "title": "TruthLens Professional Fact-Checking API",
+        "version": "3.0.1-enhanced",
+        "description": "Advanced AI-powered fact-checking with Google Fact Check Tools API, OpenAI integration, and audio analysis",
+        "base_url": "http://localhost:8080",
+        "rate_limits": {
+            "analyze_endpoint": "30 requests per minute per IP",
+            "other_endpoints": "100 requests per minute per IP"
+        },
+        "endpoints": {
+            "/": {
+                "method": "GET",
+                "description": "Root endpoint showing API status and features",
+                "parameters": "None",
+                "response": "API metadata and feature availability"
+            },
+            "/health": {
+                "method": "GET", 
+                "description": "Health check endpoint",
+                "parameters": "None",
+                "response": "Service health status"
+            },
+            "/api/analyze": {
+                "method": "POST",
+                "description": "Analyze a claim for fact-checking",
+                "rate_limit": "30/minute",
+                "content_type": "application/json",
+                "parameters": {
+                    "text_claim": {
+                        "type": "string",
+                        "required": True,
+                        "description": "The factual claim to analyze",
+                        "min_length": 3,
+                        "max_length": 10000,
+                        "examples": ["The Earth is flat", "Vaccines cause autism", "Climate change is real"]
+                    },
+                    "audio_data": {
+                        "type": "string",
+                        "required": False,
+                        "description": "Base64 encoded audio data (WAV, MP3, M4A, OGG)",
+                        "max_size": "50MB"
+                    },
+                    "enable_prosody": {
+                        "type": "boolean",
+                        "required": False,
+                        "default": True,
+                        "description": "Enable prosody analysis for audio (sarcasm detection, etc.)"
+                    }
+                },
+                "response": {
+                    "transcription": "Audio transcription if provided",
+                    "claim": "Extracted or provided claim",
+                    "verdict": "True/False/Partially True/Misleading/Unverifiable",
+                    "confidence": "Confidence score (0-1)",
+                    "explanation": "Detailed explanation of the verdict",
+                    "evidence": "Evidence assessment with sources and reasoning",
+                    "sources": "List of sources used in fact-checking",
+                    "prosody": "Audio analysis results if enabled",
+                    "credibility_metrics": "Credibility assessment scores",
+                    "processing_time": "Analysis time in seconds"
+                }
+            },
+            "/api/analyze-file": {
+                "method": "POST",
+                "description": "Analyze claim with file upload",
+                "content_type": "multipart/form-data",
+                "parameters": {
+                    "audio_file": {
+                        "type": "file",
+                        "required": True,
+                        "description": "Audio file to analyze",
+                        "supported_formats": ["WAV", "MP3", "M4A", "OGG"]
+                    },
+                    "text_claim": {
+                        "type": "string",
+                        "required": False,
+                        "description": "Optional text claim to fact-check"
+                    },
+                    "enable_prosody": {
+                        "type": "boolean",
+                        "required": False,
+                        "default": True
+                    }
+                }
+            },
+            "/api/status": {
+                "method": "GET",
+                "description": "Get detailed API status and configuration",
+                "response": "API capabilities and recommendations"
+            },
+            "/api/stats": {
+                "method": "GET",
+                "description": "Get API usage statistics",
+                "response": "Request counts, cache size, uptime"
+            }
+        },
+        "error_codes": {
+            "400": {
+                "description": "Bad Request",
+                "common_causes": [
+                    "Empty or invalid text claim",
+                    "Invalid audio data format",
+                    "Request validation failed"
+                ]
+            },
+            "408": {
+                "description": "Request Timeout",
+                "common_causes": [
+                    "Audio processing took too long",
+                    "Analysis exceeded time limits"
+                ]
+            },
+            "429": {
+                "description": "Too Many Requests",
+                "common_causes": [
+                    "Rate limit exceeded (30/minute for /api/analyze)"
+                ]
+            },
+            "503": {
+                "description": "Service Unavailable", 
+                "common_causes": [
+                    "External API services down",
+                    "Fact checker not initialized"
+                ]
+            },
+            "500": {
+                "description": "Internal Server Error",
+                "common_causes": [
+                    "Unexpected analysis failure",
+                    "Model loading issues"
+                ]
+            }
+        },
+        "examples": {
+            "simple_text_claim": {
+                "url": "/api/analyze",
+                "method": "POST",
+                "body": {
+                    "text_claim": "The Earth is flat",
+                    "enable_prosody": False
+                }
+            },
+            "audio_with_text": {
+                "url": "/api/analyze", 
+                "method": "POST",
+                "body": {
+                    "text_claim": "Climate change is a hoax",
+                    "audio_data": "base64_encoded_audio_data_here",
+                    "enable_prosody": True
+                }
+            },
+            "file_upload": {
+                "url": "/api/analyze-file",
+                "method": "POST",
+                "content_type": "multipart/form-data",
+                "fields": {
+                    "audio_file": "audio.wav",
+                    "text_claim": "Optional claim text",
+                    "enable_prosody": "true"
+                }
+            }
+        },
+        "features": {
+            "basic_fact_checking": "Built-in knowledge base for common conspiracy theories",
+            "professional_apis": "Google Fact Check API and OpenAI integration when configured",
+            "audio_analysis": "Whisper-based transcription and prosody analysis",
+            "sarcasm_detection": "Audio-based sarcasm and emotion detection",
+            "multi_source_verification": "Cross-reference multiple fact-checking sources",
+            "rate_limiting": "Protection against abuse with per-IP limits",
+            "timeout_handling": "Graceful handling of long-running requests",
+            "input_validation": "Comprehensive request validation with helpful error messages"
+        },
+        "setup_instructions": {
+            "basic_mode": "No additional setup required - uses built-in knowledge base",
+            "professional_mode": "Add API keys to .env file: GOOGLE_FACT_CHECK_API_KEY, OPENAI_API_KEY",
+            "audio_support": "Requires librosa and transformers for audio processing"
         }
     }
 

@@ -1,0 +1,30 @@
+# Enhanced backend requirements for improved functionality
+
+# Core FastAPI and web framework
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+python-multipart
+
+# Rate limiting and security
+slowapi>=0.1.9
+python-jose[cryptography]
+
+# Enhanced middleware
+python-multipart
+starlette
+
+# Input validation
+pydantic[email]>=2.0.0
+
+# Async HTTP client
+aiohttp>=3.9.0
+
+# Existing dependencies (keep these)
+# python-dotenv
+# transformers
+# torch
+# librosa
+# numpy
+# sentence-transformers
+# plotly
+# requests

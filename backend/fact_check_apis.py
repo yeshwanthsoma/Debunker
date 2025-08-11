@@ -72,7 +72,7 @@ Output: ["The moon landing was faked by Hollywood"]
 Respond with JSON array: ["claim1", "claim2"]"""
 
             payload = {
-                "model": "gpt-3.5-turbo",
+                "model": "gpt-4o",
                 "messages": [
                     {"role": "user", "content": prompt}
                 ],
@@ -441,6 +441,21 @@ CLAIM: "COVID-19 vaccines cause myocarditis in all recipients."
 → RESEARCH: CDC data, medical journals, clinical trial results
 → VERDICT: FALSE (Myocarditis is rare, not universal; benefits outweigh risks)
 
+CLAIM: "Water boils at 100 degrees Celsius at sea level."
+→ EXTRACT: "Water boils at 100 degrees Celsius at sea level"
+→ RESEARCH: Check physics textbooks, scientific sources, NIST standards
+→ VERDICT: TRUE (Confirmed by scientific consensus and physical laws)
+
+CLAIM: "Climate change is primarily caused by human activities according to scientific consensus."
+→ EXTRACT: "Climate change is primarily caused by human activities according to scientific consensus"
+→ RESEARCH: Check IPCC reports, NASA climate data, peer-reviewed studies
+→ VERDICT: TRUE (Overwhelming scientific evidence supports human causation)
+
+CLAIM: "Vaccines are effective at preventing diseases they target."
+→ EXTRACT: "Vaccines are effective at preventing diseases they target"
+→ RESEARCH: Check CDC vaccine effectiveness data, WHO reports, medical studies
+→ VERDICT: TRUE (Extensive clinical evidence demonstrates vaccine effectiveness)
+
 Use your internet access to find the most current and authoritative information available."""
         return prompt
     
@@ -793,7 +808,29 @@ class MultiSourceFactChecker:
             primary_verdict = "Unverifiable"
             final_confidence = 0.1
         
-        # TODO: Add scientific consensus boost for well-established facts if needed
+        # Add scientific consensus boost for well-established facts
+        scientific_consensus_topics = [
+            ("vaccine", ["safe", "effective", "work"], "True"),
+            ("climate change", ["real", "human", "caused", "anthropogenic"], "True"), 
+            ("evolution", ["theory", "true", "real"], "True"),
+            ("earth", ["round", "spherical", "oblate"], "True"),
+            ("water", ["boils", "100", "celsius"], "True"),
+            ("gravity", ["exists", "real", "pulls"], "True")
+        ]
+        
+        claim_lower = claim.lower()
+        for topic, keywords, consensus_verdict in scientific_consensus_topics:
+            if topic in claim_lower and any(kw in claim_lower for kw in keywords):
+                if primary_verdict != consensus_verdict and final_confidence < 0.9:
+                    # Check if AI and Google actually support the scientific consensus
+                    ai_supports_consensus = any(r.verdict == consensus_verdict for r in ai_results)
+                    google_supports_consensus = processed_google.get("consensus_verdict") == consensus_verdict
+                    
+                    if ai_supports_consensus or google_supports_consensus:
+                        logger.info(f"🧬 Scientific consensus boost applied for {topic} → {consensus_verdict}")
+                        primary_verdict = consensus_verdict
+                        final_confidence = min(0.95, final_confidence + 0.1)
+                        break
         
         # Combine explanations with priority to AI analysis
         explanations = []
@@ -869,17 +906,42 @@ ORIGINAL CLAIM: "{claim}"
 FACT-CHECK RESULTS FROM GOOGLE:
 {chr(10).join(fact_check_summaries)}
 
-CRITICAL INTERPRETATION TASK:
-Many fact-checks are about debunking MISINFORMATION related to a topic, not debunking the topic itself.
+CRITICAL INTERPRETATION RULES:
+Google Fact Check often contains articles debunking MISINFORMATION about established scientific topics. You must distinguish between:
 
-Examples:
-- If the claim is "Vaccines are safe" and fact-checks say "RFK Jr. misleads about vaccine safety" → This SUPPORTS vaccine safety
-- If the claim is "Climate change is real" and fact-checks say "Study debunks climate denial" → This SUPPORTS climate change
-- If the claim is "Earth is round" and fact-checks say "Flat earth theory debunked" → This SUPPORTS round earth
+A) DEBUNKING THE CLAIM ITSELF (claim is false)
+B) DEBUNKING MISINFORMATION ABOUT THE CLAIM (claim is actually true)
 
-Your job: Determine if these fact-checks are:
-1. DEBUNKING THE CLAIM ITSELF 
-2. DEBUNKING MISINFORMATION ABOUT THE CLAIM (which supports the claim)
+DETAILED EXAMPLES:
+
+CLAIM: "Vaccines are safe and effective"
+- Google Result: "Fact-check debunks RFK Jr. vaccine claims" → SUPPORTS vaccine safety (debunking misinformation)
+- Google Result: "Study finds vaccines cause autism" → REFUTES vaccine safety (debunking the claim itself)
+
+CLAIM: "Climate change is caused by human activities"  
+- Google Result: "Fact-check: Climate denial study misleading" → SUPPORTS climate science (debunking denial)
+- Google Result: "IPCC report confirms human causation" → SUPPORTS climate science (direct confirmation)
+- Google Result: "Study proves climate change is natural" → REFUTES climate science (debunking the claim)
+
+CLAIM: "The Earth is round"
+- Google Result: "Flat Earth theory debunked by NASA" → SUPPORTS round Earth (debunking misinformation)
+- Google Result: "NASA admits Earth is flat" → REFUTES round Earth (if true, which it's not)
+
+INTERPRETATION LOGIC:
+1. Look for keywords: "debunks", "misleading", "false claims about", "misinformation about"
+2. Identify the TARGET of the debunking - is it debunking the claim or debunking misinformation about the claim?
+3. For scientific consensus topics (vaccines, climate, basic science), assume debunking is about misinformation UNLESS explicitly stated otherwise
+
+SCIENTIFIC CONSENSUS TOPICS (default to True unless clearly refuted):
+- Vaccine safety and effectiveness
+- Climate change and human causation
+- Basic physics (water boiling, gravity, etc.)
+- Earth's shape and astronomy
+- Evolution and biology basics
+
+Your job: Determine if these Google fact-checks are:
+1. SUPPORTING THE CLAIM (by debunking misinformation about it)
+2. REFUTING THE CLAIM (by providing evidence against it)
 3. MIXED/UNCLEAR
 
 Respond with ONLY this JSON:
@@ -887,57 +949,61 @@ Respond with ONLY this JSON:
     "interpretation": "supporting_claim|refuting_claim|mixed|unclear",
     "consensus_verdict": "True|False|Misleading|Unverifiable", 
     "confidence": 0.75,
-    "reasoning": "Brief explanation of your interpretation",
-    "evidence_summary": "What the fact-checks actually indicate about the original claim"
+    "reasoning": "Detailed explanation focusing on whether Google results debunk the claim itself or misinformation about the claim",
+    "evidence_summary": "What the fact-checks actually indicate about the original claim with specific focus on scientific consensus"
 }}"""
 
         try:
-            session = await self.openai_checker._get_session()
-            
-            payload = {
-                "model": "gpt-3.5-turbo",
-                "messages": [
-                    {"role": "system", "content": "You are an expert at interpreting fact-check context. Respond only with valid JSON."},
-                    {"role": "user", "content": prompt}
-                ],
-                "max_tokens": 300,
-                "temperature": 0.1
+            headers = {
+                "Authorization": f"Bearer {get_api_key('openai')}",
+                "Content-Type": "application/json"
             }
             
-            logger.info(f"🧠 Analyzing Google results with LLM...")
-            
-            async with session.post("https://api.openai.com/v1/chat/completions", json=payload) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    content = data["choices"][0]["message"]["content"]
-                    
-                    try:
-                        # Clean and parse JSON
-                        clean_content = content.strip()
-                        if clean_content.startswith("```json"):
-                            clean_content = clean_content.replace("```json", "").replace("```", "").strip()
+            async with aiohttp.ClientSession(headers=headers) as session:
+                payload = {
+                    "model": "gpt-4o",
+                    "messages": [
+                        {"role": "system", "content": "You are an expert at interpreting fact-check context. Respond only with valid JSON."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    "max_tokens": 500,
+                    "temperature": 0.1
+                }
+                
+                logger.info(f"🧠 Analyzing Google results with LLM...")
+                
+                async with session.post("https://api.openai.com/v1/chat/completions", json=payload) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        content = data["choices"][0]["message"]["content"]
                         
-                        result = json.loads(clean_content)
-                        
-                        logger.info(f"✅ LLM interpretation: {result.get('interpretation')} → {result.get('consensus_verdict')}")
-                        logger.info(f"   Reasoning: {result.get('reasoning', 'No reasoning provided')}")
-                        
-                        return {
-                            "consensus_verdict": result.get("consensus_verdict", "Unverifiable"),
-                            "confidence": float(result.get("confidence", 0.5)),
-                            "result_count": len(google_results),
-                            "interpretation": result.get("interpretation", "unclear"),
-                            "summary": result.get("evidence_summary", "LLM analysis of fact-check context"),
-                            "reasoning": result.get("reasoning", "LLM-based interpretation")
-                        }
-                        
-                    except json.JSONDecodeError as e:
-                        logger.warning(f"Failed to parse LLM response for Google analysis: {e}")
-                        logger.debug(f"Raw response: {content}")
+                        try:
+                            # Clean and parse JSON
+                            clean_content = content.strip()
+                            if clean_content.startswith("```json"):
+                                clean_content = clean_content.replace("```json", "").replace("```", "").strip()
+                            
+                            result = json.loads(clean_content)
+                            
+                            logger.info(f"✅ LLM interpretation: {result.get('interpretation')} → {result.get('consensus_verdict')}")
+                            logger.info(f"   Reasoning: {result.get('reasoning', 'No reasoning provided')}")
+                            
+                            return {
+                                "consensus_verdict": result.get("consensus_verdict", "Unverifiable"),
+                                "confidence": float(result.get("confidence", 0.5)),
+                                "result_count": len(google_results),
+                                "interpretation": result.get("interpretation", "unclear"),
+                                "summary": result.get("evidence_summary", "LLM analysis of fact-check context"),
+                                "reasoning": result.get("reasoning", "LLM-based interpretation")
+                            }
+                            
+                        except json.JSONDecodeError as e:
+                            logger.warning(f"Failed to parse LLM response for Google analysis: {e}")
+                            logger.debug(f"Raw response: {content}")
+                            return self._simple_google_aggregation(google_results)
+                    else:
+                        logger.error(f"LLM analysis failed: {response.status}")
                         return self._simple_google_aggregation(google_results)
-                else:
-                    logger.error(f"LLM analysis failed: {response.status}")
-                    return self._simple_google_aggregation(google_results)
                     
         except Exception as e:
             logger.error(f"Error in LLM Google analysis: {e}")
