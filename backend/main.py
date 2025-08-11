@@ -82,19 +82,12 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(SlowAPIMiddleware)
 
-# Configure CORS
+# Configure CORS - Allow all origins for now
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://audio-debunker-r09durifd-yeshwanth-somas-projects.vercel.app",
-        "https://*.vercel.app",  # Allow all Vercel domains
-        "http://localhost:3000",
-        "http://localhost:5173",
-        "http://localhost:8080",
-        "*"  # Fallback for development
-    ],
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_origins=["*"],
+    allow_credentials=False,  # Must be False when using allow_origins=["*"]
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD"],
     allow_headers=["*"],
 )
 
@@ -454,6 +447,15 @@ async def root():
             "prosody_detection": True
         }
     }
+
+# Explicit OPTIONS handler for CORS preflight
+@app.options("/api/analyze-file")
+async def options_analyze_file():
+    return {"message": "OK"}
+
+@app.options("/api/analyze")
+async def options_analyze():
+    return {"message": "OK"}
 
 @app.get("/health")
 async def health_check():
