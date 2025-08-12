@@ -142,12 +142,21 @@ class AlternativeFactChecker:
         logger.info("🔧 Initializing models...")
         
         try:
-            # Speech recognition
-            self.transcriber = pipeline(
-                "automatic-speech-recognition", 
-                model="openai/whisper-small",
-                device=-1  # CPU only for now
-            )
+            # Check if OpenAI API is available for Whisper
+            from config import is_api_available, get_api_key
+            self.openai_key = get_api_key("openai")
+            self.use_openai_whisper = is_api_available("openai")
+            
+            if self.use_openai_whisper:
+                logger.info("✅ Using OpenAI Whisper API for transcription")
+            else:
+                logger.warning("⚠️ OpenAI API not available, falling back to local Whisper")
+                # Fallback to local model only if OpenAI is not available
+                self.transcriber = pipeline(
+                    "automatic-speech-recognition", 
+                    model="openai/whisper-tiny",  # Use tiny for faster fallback
+                    device=-1
+                )
             
             # Sentence embeddings
             self.embeddings = SentenceTransformer('all-MiniLM-L6-v2')
@@ -199,6 +208,64 @@ class AlternativeFactChecker:
             }
         }
         return knowledge_base
+    
+    async def transcribe_audio_openai(self, audio_file_path: str) -> str:
+        """Transcribe audio using OpenAI Whisper API with timeout"""
+        try:
+            logger.info("🗣️ Transcribing audio with OpenAI Whisper API...")
+            
+            # Add timeout for API call using thread executor
+            def _transcribe():
+                # Read the audio file
+                with open(audio_file_path, 'rb') as audio_file:
+                    # Use the openai client directly
+                    import openai
+                    client = openai.OpenAI(api_key=self.openai_key, timeout=30.0)
+                    
+                    # Call Whisper API
+                    transcript = client.audio.transcriptions.create(
+                        model="whisper-1",
+                        file=audio_file,
+                        response_format="text"
+                    )
+                    
+                    return transcript.strip()
+            
+            # Run in thread executor with timeout
+            import concurrent.futures
+            loop = asyncio.get_event_loop()
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                transcript = await asyncio.wait_for(
+                    loop.run_in_executor(executor, _transcribe), 
+                    timeout=60.0
+                )
+            logger.info(f"✅ OpenAI Whisper API transcription completed")
+            return transcript
+                
+        except asyncio.TimeoutError:
+            logger.error("❌ OpenAI Whisper API timeout (60 seconds)")
+            # Fallback to local transcription if API times out
+            if hasattr(self, 'transcriber'):
+                logger.info("🔄 Falling back to local Whisper model due to timeout...")
+                result = self.transcriber(audio_file_path, return_timestamps=True)
+                return result['text']
+            else:
+                raise Exception("OpenAI Whisper API timeout and no local fallback available")
+        except Exception as e:
+            logger.error(f"❌ OpenAI Whisper API error: {e}")
+            # Fallback to local transcription if API fails
+            if hasattr(self, 'transcriber'):
+                logger.info("🔄 Falling back to local Whisper model...")
+                result = self.transcriber(audio_file_path, return_timestamps=True)
+                return result['text']
+            else:
+                raise Exception(f"Both OpenAI Whisper API and local fallback failed: {e}")
+    
+    def transcribe_audio_local(self, audio_file_path: str) -> str:
+        """Transcribe audio using local Whisper model"""
+        logger.info("🗣️ Transcribing audio with local Whisper model...")
+        result = self.transcriber(audio_file_path, return_timestamps=True)
+        return result['text']
     
     def extract_advanced_prosody(self, audio_path: str) -> Dict:
         """Extract prosody features from audio"""
@@ -500,9 +567,11 @@ async def analyze_claim(request: Request, analysis_request: AnalysisRequest):
             logger.debug(f"   Audio file saved: {audio_file}")
             
             # Transcribe
-            logger.info(f"🗣️ [{request_id}] STAGE 2: Transcribing audio with Whisper...")
-            transcription_result = fact_checker.transcriber(audio_file, return_timestamps=True)
-            transcription = transcription_result['text']
+            logger.info(f"🗣️ [{request_id}] STAGE 2: Transcribing audio...")
+            if fact_checker.use_openai_whisper:
+                transcription = await fact_checker.transcribe_audio_openai(audio_file)
+            else:
+                transcription = fact_checker.transcribe_audio_local(audio_file)
             stage_times["transcription_done"] = time.time()
             logger.info(f"   Transcription: '{transcription[:100]}{'...' if len(transcription) > 100 else ''}'")
             
@@ -803,7 +872,7 @@ async def analyze_claim_with_file(
         if audio_file_path and os.path.exists(audio_file_path):
             os.unlink(audio_file_path)
         
-        return result.dict()
+        return result.model_dump()
         
     except Exception as e:
         logger.error(f"❌ Error during file analysis: {str(e)}")
