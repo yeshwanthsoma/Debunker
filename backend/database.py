@@ -77,7 +77,7 @@ class ClaimSource(Base):
     
     # Source details
     source_name = Column(String(200), nullable=False)  # CNN, Reddit, Twitter, etc.
-    source_url = Column(String(1000), nullable=False)
+    source_url = Column(String(1000), nullable=True)
     source_type = Column(String(50), nullable=False)  # news, social_media, fact_check
     author = Column(String(200), nullable=True)
     published_at = Column(DateTime, nullable=True)

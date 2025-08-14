@@ -285,29 +285,28 @@ class TrendingClaimsScheduler:
                                     
                                     # Store fact-checking sources in database for proper display
                                     from database import ClaimSource
-                                    for fc_source in sources[:5]:  # Limit to top 5 fact-checking sources
-                                        # Ensure URL is never None (database constraint)
-                                        source_url = fc_source.get('url') or ''
-                                        if not source_url and fc_source.get('name'):
-                                            # Generate fallback URL for known fact-checkers
-                                            name = fc_source.get('name', '').lower()
-                                            if 'nasa' in name:
-                                                source_url = 'https://nasa.gov'
-                                            elif 'who' in name:
-                                                source_url = 'https://who.int'
-                                            elif 'cdc' in name:
-                                                source_url = 'https://cdc.gov'
-                                            elif 'scientific american' in name:
-                                                source_url = 'https://scientificamerican.com'
-                                            else:
-                                                source_url = 'https://factcheck.org'  # Generic fallback
+                                    logger.info(f"📊 Processing {len(sources)} fact-checking sources for claim {claim.id}")
+                                    
+                                    for i, fc_source in enumerate(sources[:5]):  # Limit to top 5 fact-checking sources
+                                        logger.debug(f"   Source {i+1}: {fc_source}")
+                                        
+                                        # Get the actual fact-checking URL 
+                                        source_url = fc_source.get('url', '').strip()
+                                        source_name = fc_source.get('name', 'Unknown Fact-Checker')
+                                        
+                                        # Log what we found
+                                        if source_url:
+                                            logger.info(f"✅ Found URL for {source_name}: {source_url[:80]}...")
+                                        else:
+                                            logger.warning(f"⚠️ No URL provided for {source_name} - storing as name only")
+                                            source_url = None  # Store as NULL in database
                                         
                                         fact_check_source = ClaimSource(
                                             claim_id=claim.id,
-                                            source_name=fc_source.get('name', 'Unknown Fact-Checker'),
+                                            source_name=source_name,
                                             source_url=source_url,
                                             source_type='fact_check_source',  # Distinguish from news source
-                                            original_content=f"Fact-checking source: {fc_source.get('name', '')}",
+                                            original_content=f"Fact-checking source: {source_name}",
                                             extracted_claim=claim.claim_text,
                                             source_reliability=fc_source.get('rating', 0.8),  # Default reliability for fact-checkers
                                             created_at=datetime.now()

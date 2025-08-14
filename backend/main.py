@@ -1322,9 +1322,19 @@ async def get_trending_claims(
     limit: int = 20,
     category: Optional[str] = None,
     status: Optional[str] = None,
+    sort: Optional[str] = "hybrid",  # hybrid, recent, trending, processed
     db: Session = Depends(get_db)
 ):
-    """Get list of trending claims with pagination and filtering"""
+    """
+    Get list of trending claims with pagination, filtering, and sorting options
+    
+    Sort options:
+    - hybrid (default): Trending score + recency boost for variety
+    - recent: Most recently discovered claims first
+    - trending: Pure trending score (highest scoring first)
+    - processed: Most recently fact-checked first
+    - popular: Most viewed and shared claims first
+    """
     try:
         # Calculate offset
         offset = (page - 1) * limit
@@ -1341,9 +1351,55 @@ async def get_trending_claims(
         # Get total count
         total = query.count()
         
-        # Get claims ordered by trending score
-        claims = query.order_by(desc(TrendingClaim.trending_score))\
-                     .offset(offset).limit(limit).all()
+        # Apply sorting based on sort parameter
+        from sqlalchemy import case, extract
+        current_time = datetime.utcnow()
+        
+        if sort == "recent":
+            # Sort by most recently discovered
+            claims = query.order_by(
+                desc(TrendingClaim.discovered_at),
+                desc(TrendingClaim.trending_score)
+            ).offset(offset).limit(limit).all()
+            
+        elif sort == "trending":
+            # Sort by pure trending score (original behavior)
+            claims = query.order_by(
+                desc(TrendingClaim.trending_score),
+                desc(TrendingClaim.view_count)
+            ).offset(offset).limit(limit).all()
+            
+        elif sort == "processed":
+            # Sort by most recently fact-checked
+            claims = query.order_by(
+                desc(TrendingClaim.processed_at),
+                desc(TrendingClaim.confidence)
+            ).offset(offset).limit(limit).all()
+            
+        elif sort == "popular":
+            # Sort by engagement (views + shares)
+            claims = query.order_by(
+                desc(TrendingClaim.view_count + TrendingClaim.share_count * 5),
+                desc(TrendingClaim.trending_score)
+            ).offset(offset).limit(limit).all()
+            
+        else:  # sort == "hybrid" (default)
+            # Hybrid score: trending + recency boost
+            claims = query.order_by(
+                desc(
+                    TrendingClaim.trending_score + 
+                    case(
+                        # Boost for claims discovered in last 24 hours
+                        (extract('epoch', current_time - TrendingClaim.discovered_at) < 86400, 0.3),
+                        # Smaller boost for claims discovered in last 7 days  
+                        (extract('epoch', current_time - TrendingClaim.discovered_at) < 604800, 0.1),
+                        # No boost for older claims
+                        else_=0.0
+                    )
+                ),
+                # Secondary sort by most recently processed
+                desc(TrendingClaim.processed_at)
+            ).offset(offset).limit(limit).all()
         
         # Get available categories
         categories = db.query(TrendingClaim.category).distinct().all()
