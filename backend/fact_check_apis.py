@@ -642,17 +642,165 @@ Respond with JSON only:
             else:
                 return self._create_fallback_result(claim)
 
+class GrokFactChecker:
+    """Grok-powered fact-checking using X.AI API"""
+    
+    def __init__(self):
+        self.api_key = get_api_key("grok")
+        self.base_url = "https://api.x.ai/v1"
+        self.model = "grok-4"
+        self.session = None
+    
+    async def close(self):
+        """Close HTTP session"""
+        if self.session:
+            await self.session.close()
+    
+    async def analyze_claim(self, claim: str, context: Optional[str] = None) -> FactCheckResult:
+        """Analyze a claim using Grok's real-time knowledge and social context"""
+        if not self.api_key:
+            raise ValueError("Grok API key not available")
+        
+        if not self.session:
+            import aiohttp
+            self.session = aiohttp.ClientSession()
+        
+        try:
+            logger.info(f"🌐 Grok analyzing claim: '{claim[:60]}...'")
+            
+            prompt = f"""You are a professional fact-checker with access to real-time social media data and current information. Analyze this claim:
+
+CLAIM: "{claim}"
+{f"CONTEXT: {context}" if context else ""}
+
+Provide a comprehensive fact-check response in JSON format. Use your access to real-time X/Twitter data and current information to assess:
+
+1. Current social media discussions about this topic
+2. Recent developments or news related to this claim  
+3. Expert opinions and official statements
+4. Evidence from credible sources
+5. Social consensus and misinformation patterns
+
+Respond with valid JSON only:
+{{
+    "verdict": "True|False|Misleading|Unverifiable",
+    "confidence": 0.85,
+    "explanation": "Detailed analysis including social context and real-time information",
+    "social_context": "Current social media discussion and expert reactions",
+    "evidence_assessment": "Key evidence and source reliability",
+    "misinformation_patterns": "Any related misinformation being spread"
+}}"""
+
+            headers = {
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json"
+            }
+            
+            payload = {
+                "model": self.model,
+                "messages": [
+                    {
+                        "role": "system", 
+                        "content": "You are a professional fact-checker with real-time social media access. Respond only in valid JSON format."
+                    },
+                    {
+                        "role": "user", 
+                        "content": prompt
+                    }
+                ],
+                "stream": False,
+                "temperature": 0.3,
+                "max_tokens": 1500
+            }
+            
+            async with self.session.post(
+                f"{self.base_url}/chat/completions",
+                headers=headers,
+                json=payload,
+                timeout=60
+            ) as response:
+                
+                if response.status == 200:
+                    data = await response.json()
+                    return self._parse_grok_response(data, claim)
+                else:
+                    error_text = await response.text()
+                    logger.error(f"❌ Grok API error {response.status}: {error_text}")
+                    return self._create_fallback_result(claim)
+                    
+        except Exception as e:
+            logger.error(f"❌ Grok fact-check failed: {e}")
+            return self._create_fallback_result(claim)
+    
+    def _parse_grok_response(self, data: Dict, claim: str) -> FactCheckResult:
+        """Parse Grok API response into FactCheckResult"""
+        try:
+            content = data.get('choices', [{}])[0].get('message', {}).get('content', '{}')
+            
+            # Clean up the response - remove any markdown formatting
+            content = content.replace('```json', '').replace('```', '').strip()
+            
+            parsed = json.loads(content)
+            
+            # Extract sources from social context
+            sources = [{
+                "name": "Grok Real-time Analysis",
+                "type": "AI Analysis with Social Media Access",
+                "url": "https://x.ai",
+                "social_context": parsed.get("social_context", ""),
+                "evidence": parsed.get("evidence_assessment", "")
+            }]
+            
+            return FactCheckResult(
+                claim=claim,
+                verdict=parsed.get("verdict", "Unverifiable"),
+                confidence=float(parsed.get("confidence", 0.5)),
+                explanation=parsed.get("explanation", "Analysis completed using real-time social data"),
+                sources=sources,
+                provider="Grok (X.AI)",
+                timestamp=datetime.now(),
+                rating_details={
+                    "social_context": parsed.get("social_context", ""),
+                    "evidence_assessment": parsed.get("evidence_assessment", ""),
+                    "misinformation_patterns": parsed.get("misinformation_patterns", "")
+                }
+            )
+            
+        except (json.JSONDecodeError, KeyError, ValueError) as e:
+            logger.warning(f"Failed to parse Grok response: {e}")
+            return self._create_fallback_result(claim)
+    
+    def _create_fallback_result(self, claim: str) -> FactCheckResult:
+        """Create fallback result when Grok analysis fails"""
+        return FactCheckResult(
+            claim=claim,
+            verdict="Unverifiable",
+            confidence=0.3,
+            explanation="Grok analysis unavailable - unable to access real-time social context",
+            sources=[{
+                "name": "Grok Analysis",
+                "type": "Social Media Context",
+                "url": "",
+                "error": "Analysis failed"
+            }],
+            provider="Grok (X.AI) - Error",
+            timestamp=datetime.now()
+        )
+
 class MultiSourceFactChecker:
     """Orchestrates multiple fact-checking sources"""
     
     def __init__(self):
         self.google_checker = GoogleFactCheckAPI()
         self.openai_checker = OpenAIFactChecker()
+        self.grok_checker = GrokFactChecker() if is_api_available("grok") else None
     
     async def close(self):
         """Close all API sessions"""
         await self.google_checker.close()
         await self.openai_checker.close()
+        if self.grok_checker:
+            await self.grok_checker.close()
     
     async def comprehensive_fact_check(self, claim: str, context: Optional[str] = None) -> Dict[str, Any]:
         """Perform comprehensive fact-checking using multiple sources"""
@@ -667,6 +815,8 @@ class MultiSourceFactChecker:
             available_apis.append("OpenAI")
         if is_api_available("anthropic"):
             available_apis.append("Anthropic")
+        if is_api_available("grok"):
+            available_apis.append("Grok")
         
         logger.info(f"   Available APIs: {', '.join(available_apis) if available_apis else 'None'}")
         
@@ -685,6 +835,11 @@ class MultiSourceFactChecker:
         if is_api_available("openai"):
             tasks.append(self._wrap_openai_result(self.openai_checker.analyze_claim(claim, context)))
             task_names.append("OpenAI")
+        
+        # Grok Analysis (Real-time Social Context)
+        if is_api_available("grok") and self.grok_checker:
+            tasks.append(self._wrap_grok_result(self.grok_checker.analyze_claim(claim, context)))
+            task_names.append("Grok")
         
         if tasks:
             logger.info(f"🚀 Running {len(tasks)} parallel API calls: {', '.join(task_names)}")
@@ -731,6 +886,10 @@ class MultiSourceFactChecker:
         """Wrapper to handle OpenAI task in gather"""
         return await openai_task
     
+    async def _wrap_grok_result(self, grok_task) -> FactCheckResult:
+        """Wrapper to handle Grok task in gather"""
+        return await grok_task
+    
     async def _synthesize_results(self, claim: str, results: List[FactCheckResult]) -> Dict[str, Any]:
         """Synthesize multiple fact-check results into a final assessment with improved weighting"""
         if not results:
@@ -750,16 +909,19 @@ class MultiSourceFactChecker:
         logger.info(f"📊 Synthesizing {len(results)} results with improved logic...")
         
         # Separate results by type for weighted analysis
-        ai_results = []
+        openai_results = []
         google_results = []
+        grok_results = []
         
         for result in results:
-            if "OpenAI" in result.provider or "AI Analysis" in str(result.sources):
-                ai_results.append(result)
+            if "OpenAI" in result.provider:
+                openai_results.append(result)
             elif "Google" in result.provider:
                 google_results.append(result)
+            elif "Grok" in result.provider:
+                grok_results.append(result)
         
-        logger.info(f"   AI Results: {len(ai_results)}, Google Results: {len(google_results)}")
+        logger.info(f"   OpenAI Results: {len(openai_results)}, Google Results: {len(google_results)}, Grok Results: {len(grok_results)}")
         
         # Enhanced Google result interpretation using LLM
         processed_google = await self._process_google_results_with_llm(google_results, claim)
@@ -777,15 +939,25 @@ class MultiSourceFactChecker:
         confidence_sum = 0.0
         confidence_weights = 0.0
         
-        # Weight AI analysis heavily (it has context understanding)
-        ai_weight = 3.0
-        for result in ai_results:
-            weight = ai_weight * result.confidence
+        # Weight OpenAI analysis heavily (it has internet access and context understanding)
+        openai_weight = 3.0
+        for result in openai_results:
+            weight = openai_weight * result.confidence
             weighted_scores[result.verdict] += weight
             total_weight += weight
             confidence_sum += result.confidence * weight
             confidence_weights += weight
-            logger.info(f"   AI: {result.verdict} (weight: {weight:.2f}, conf: {result.confidence:.2f})")
+            logger.info(f"   OpenAI: {result.verdict} (weight: {weight:.2f}, conf: {result.confidence:.2f})")
+        
+        # Weight Grok analysis moderately (real-time social context, but can be influenced by social media bias)
+        grok_weight = 2.0
+        for result in grok_results:
+            weight = grok_weight * result.confidence
+            weighted_scores[result.verdict] += weight
+            total_weight += weight
+            confidence_sum += result.confidence * weight
+            confidence_weights += weight
+            logger.info(f"   Grok: {result.verdict} (weight: {weight:.2f}, conf: {result.confidence:.2f})")
         
         # Weight processed Google results
         google_weight = 1.0
@@ -822,21 +994,28 @@ class MultiSourceFactChecker:
         for topic, keywords, consensus_verdict in scientific_consensus_topics:
             if topic in claim_lower and any(kw in claim_lower for kw in keywords):
                 if primary_verdict != consensus_verdict and final_confidence < 0.9:
-                    # Check if AI and Google actually support the scientific consensus
-                    ai_supports_consensus = any(r.verdict == consensus_verdict for r in ai_results)
+                    # Check if any AI and Google actually support the scientific consensus
+                    openai_supports_consensus = any(r.verdict == consensus_verdict for r in openai_results)
+                    grok_supports_consensus = any(r.verdict == consensus_verdict for r in grok_results)
                     google_supports_consensus = processed_google.get("consensus_verdict") == consensus_verdict
                     
-                    if ai_supports_consensus or google_supports_consensus:
+                    if openai_supports_consensus or grok_supports_consensus or google_supports_consensus:
                         logger.info(f"🧬 Scientific consensus boost applied for {topic} → {consensus_verdict}")
+                        logger.info(f"   Support - OpenAI: {openai_supports_consensus}, Grok: {grok_supports_consensus}, Google: {google_supports_consensus}")
                         primary_verdict = consensus_verdict
                         final_confidence = min(0.95, final_confidence + 0.1)
                         break
         
-        # Combine explanations with priority to AI analysis
+        # Combine explanations with priority to OpenAI, then Grok, then Google
         explanations = []
         
-        # Prioritize AI explanations
-        for result in ai_results:
+        # Prioritize OpenAI explanations (highest weight)
+        for result in openai_results:
+            if result.explanation:
+                explanations.append(f"[{result.provider}] {result.explanation}")
+        
+        # Add Grok explanations (real-time social context)
+        for result in grok_results:
             if result.explanation:
                 explanations.append(f"[{result.provider}] {result.explanation}")
         
@@ -867,7 +1046,8 @@ class MultiSourceFactChecker:
             "provider": "Multi-Source Analysis",
             "details": {
                 "source_count": len(results),
-                "ai_results": len(ai_results),
+                "openai_results": len(openai_results),
+                "grok_results": len(grok_results),
                 "google_results": len(google_results),
                 "weighted_scores": weighted_scores,
                 "total_weight": total_weight,
@@ -875,7 +1055,7 @@ class MultiSourceFactChecker:
                 "primary_claims_extracted": self._extract_primary_claims(results),
                 "claim_evaluations": self._extract_claim_evaluations(results),
                 "web_sources_consulted": self._extract_web_sources(all_sources),
-                "reasoning": f"Weighted analysis: AI results ({len(ai_results)}) + Google results ({len(google_results)}) = {primary_verdict}"
+                "reasoning": f"Weighted analysis: OpenAI results ({len(openai_results)}) + Grok results ({len(grok_results)}) + Google results ({len(google_results)}) = {primary_verdict}"
             }
         }
     
