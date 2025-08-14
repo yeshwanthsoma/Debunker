@@ -17,6 +17,10 @@ class Settings(BaseSettings):
     log_level: str = Field(default="INFO")
     secret_key: str = Field(default="dev-secret-key")
     
+    # API Authentication
+    api_username: str = Field(default="admin")
+    api_password: str = Field(default="secure_password_change_in_production")
+    
     # API Configuration
     api_host: str = Field(default="0.0.0.0")
     api_port: int = Field(default=8080)

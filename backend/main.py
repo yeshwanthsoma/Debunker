@@ -37,6 +37,7 @@ import requests
 from contextlib import asynccontextmanager
 from config import get_settings, is_api_available, get_api_key
 from fact_check_apis import MultiSourceFactChecker
+from auth import verify_credentials, get_current_user
 from models import (
     AnalysisResponse, ProsodyAnalysis, SourceInfo,
     EvidenceAssessment, DebateContent, CredibilityMetrics, ExpertOpinion,
@@ -603,8 +604,12 @@ async def health_check():
 
 @app.post("/api/analyze", response_model=AnalysisResponse)
 @limiter.limit("30/minute")
-async def analyze_claim(request: Request, analysis_request: AnalysisRequest):
-    """Analyze a claim for fact-checking"""
+async def analyze_claim(
+    request: Request, 
+    analysis_request: AnalysisRequest,
+    authenticated: bool = Depends(verify_credentials)
+):
+    """Analyze a claim for fact-checking (requires authentication)"""
     global request_counter
     request_counter += 1
     request_id = f"REQ-{request_counter:04d}"
@@ -910,9 +915,10 @@ async def analyze_claim_with_file(
     request: Request,
     audio_file: UploadFile = File(..., description="Audio file to analyze"),
     text_claim: str = Form("", description="Optional text claim to fact-check"),
+    authenticated: bool = Depends(verify_credentials),
     enable_prosody: bool = Form(True, description="Enable prosody analysis")
 ):
-    """Analyze a claim with file upload support"""
+    """Analyze a claim with file upload support (requires authentication)"""
     if not fact_checker:
         raise HTTPException(status_code=503, detail="Fact checker not initialized")
     
@@ -1451,7 +1457,10 @@ async def get_trending_claim_detail(
 
 @app.post("/api/trigger-aggregation", response_model=AggregationTriggerResponse)
 @limiter.limit("5/minute")  # Limit to prevent abuse
-async def trigger_news_aggregation(request: Request):
+async def trigger_news_aggregation(
+    request: Request,
+    authenticated: bool = Depends(verify_credentials)
+):
     """Manually trigger news aggregation and claim discovery"""
     try:
         start_time = time.time()
@@ -1633,7 +1642,8 @@ async def get_claim_social_context(
 async def enhance_claim_with_grok(
     claim_id: int,
     request: Request,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    authenticated: bool = Depends(verify_credentials)
 ):
     """Enhance a claim's fact-check with Grok social context"""
     try:
@@ -1777,7 +1787,8 @@ async def get_scheduler_status():
 @limiter.limit("5/minute")
 async def trigger_scheduler_job(
     request: Request,
-    job_id: str
+    job_id: str,
+    authenticated: bool = Depends(verify_credentials)
 ):
     """Manually trigger a specific scheduled job"""
     try:
