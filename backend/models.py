@@ -98,4 +98,70 @@ class StatsResponse(BaseModel):
     """Statistics response model"""
     total_requests: int = Field(..., description="Total number of requests processed")
     cache_size: int = Field(..., description="Number of cached results")
-    uptime: float = Field(..., description="Service uptime in seconds")
+
+# Trending Claims Models
+class TrendingClaimResponse(BaseModel):
+    """Response model for trending claim"""
+    id: int = Field(..., description="Claim ID")
+    claim_text: str = Field(..., description="The factual claim")
+    title: str = Field(..., description="Display title/headline")
+    category: str = Field(..., description="Claim category")
+    verdict: Optional[str] = Field(None, description="Fact-check verdict")
+    confidence: Optional[float] = Field(None, description="Confidence score")
+    explanation: Optional[str] = Field(None, description="Brief explanation")
+    source_type: str = Field(..., description="Source type (news, reddit, etc.)")
+    trending_score: float = Field(..., description="Trending/controversy score")
+    view_count: int = Field(default=0, description="Number of views")
+    share_count: int = Field(default=0, description="Number of shares")
+    status: str = Field(..., description="Processing status")
+    discovered_at: str = Field(..., description="When claim was discovered")
+    processed_at: Optional[str] = Field(None, description="When fact-checking completed")
+    tags: Optional[List[str]] = Field(None, description="Related tags")
+
+class TrendingClaimsListResponse(BaseModel):
+    """Response model for trending claims list"""
+    claims: List[TrendingClaimResponse] = Field(..., description="List of trending claims")
+    total: int = Field(..., description="Total number of claims")
+    page: int = Field(..., description="Current page number")
+    limit: int = Field(..., description="Claims per page")
+    categories: List[str] = Field(..., description="Available categories")
+
+class TrendingClaimDetailResponse(BaseModel):
+    """Detailed response model for a specific trending claim"""
+    id: int = Field(..., description="Claim ID")
+    claim_text: str = Field(..., description="The factual claim")
+    title: str = Field(..., description="Display title/headline")
+    category: str = Field(..., description="Claim category")
+    verdict: Optional[str] = Field(None, description="Fact-check verdict")
+    confidence: Optional[float] = Field(None, description="Confidence score")
+    explanation: Optional[str] = Field(None, description="Detailed explanation")
+    evidence_summary: Optional[str] = Field(None, description="Evidence summary")
+    source_type: str = Field(..., description="Source type")
+    source_url: Optional[str] = Field(None, description="Original source URL")
+    trending_score: float = Field(..., description="Trending score")
+    controversy_level: float = Field(..., description="Controversy level")
+    view_count: int = Field(..., description="View count")
+    share_count: int = Field(..., description="Share count")
+    status: str = Field(..., description="Processing status")
+    processing_time: Optional[float] = Field(None, description="Fact-check processing time")
+    discovered_at: str = Field(..., description="Discovery timestamp")
+    processed_at: Optional[str] = Field(None, description="Processing timestamp")
+    tags: Optional[List[str]] = Field(None, description="Tags")
+    keywords: Optional[List[str]] = Field(None, description="Keywords")
+    related_entities: Optional[List[str]] = Field(None, description="Related entities")
+    sources: List[Dict] = Field(default_factory=list, description="Source details")
+
+class AggregationTriggerResponse(BaseModel):
+    """Response for triggering news aggregation"""
+    message: str = Field(..., description="Status message")
+    claims_discovered: int = Field(..., description="Number of new claims discovered")
+    claims_saved: int = Field(..., description="Number of claims saved to database")
+    execution_time: float = Field(..., description="Time taken for aggregation")
+
+class CategoryStatsResponse(BaseModel):
+    """Response for category statistics"""
+    category: str = Field(..., description="Category name")
+    total_claims: int = Field(..., description="Total claims in category")
+    processed_claims: int = Field(..., description="Processed claims count")
+    avg_controversy: float = Field(..., description="Average controversy score")
+    most_recent: Optional[str] = Field(None, description="Most recent claim date")

@@ -40,12 +40,21 @@ from fact_check_apis import MultiSourceFactChecker
 from models import (
     AnalysisResponse, ProsodyAnalysis, SourceInfo,
     EvidenceAssessment, DebateContent, CredibilityMetrics, ExpertOpinion,
-    ErrorResponse, HealthResponse, StatsResponse
+    ErrorResponse, HealthResponse, StatsResponse,
+    TrendingClaimResponse, TrendingClaimsListResponse, TrendingClaimDetailResponse,
+    AggregationTriggerResponse, CategoryStatsResponse
 )
+from database import get_db, TrendingClaim, ClaimSource, ClaimAnalytics, init_db
+from news_aggregator import NewsAggregator, save_claims_to_database
+from grok_integration import GrokSocialAnalyzer, enhance_trending_claim_with_grok
+from scheduler import start_background_scheduler, stop_background_scheduler, get_scheduler
+from startup_aggregation import run_startup_aggregation
+from sqlalchemy.orm import Session
+from sqlalchemy import desc, func
 
 # Configure logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # Enhanced logging configuration
 logging.basicConfig(
@@ -483,6 +492,56 @@ async def startup_event():
             logger.info("📝 Running in BASIC mode. Add API keys for professional verification.")
             multi_source_checker = None
             
+        # Initialize database
+        logger.info("🗄️ Initializing database...")
+        try:
+            init_db()
+            logger.info("✅ Database initialized successfully!")
+        except Exception as e:
+            logger.error(f"❌ Database initialization failed: {e}")
+            # Don't raise - continue without database features
+        
+        # Run startup aggregation to get real data immediately  
+        logger.info("🔍 Running startup trending claims discovery...")
+        try:
+            from news_aggregator import NewsAggregator, save_claims_to_database
+            
+            # Create aggregator and discover claims immediately
+            aggregator = NewsAggregator()
+            aggregator.use_grok_at_startup = False  # Skip Grok for faster startup
+            
+            logger.info("📰 Discovering fresh trending claims...")
+            claims = await aggregator.discover_trending_claims(limit=15)
+            
+            if claims:
+                saved_count = await save_claims_to_database(claims)
+                logger.info(f"💾 Saved {saved_count} new claims to database")
+                
+                # Simple fact-check for immediate availability
+                if saved_count > 0:
+                    from scheduler import TrendingClaimsScheduler
+                    scheduler_instance = TrendingClaimsScheduler()
+                    fact_checked = await scheduler_instance._professional_fact_check_new_claims()
+                    logger.info(f"✅ Startup complete: {saved_count} claims discovered, {fact_checked} fact-checked!")
+                else:
+                    logger.info("ℹ️ No new claims (duplicates of existing)")
+            else:
+                logger.warning("⚠️ No claims discovered at startup - will retry via background scheduler")
+                
+        except Exception as e:
+            logger.error(f"❌ Startup aggregation failed: {e}")
+            logger.info("🔄 Background scheduler will handle discovery automatically")
+            # Continue without startup data
+        
+        # Start background scheduler for trending claims
+        logger.info("⏰ Starting background scheduler...")
+        try:
+            await start_background_scheduler()
+            logger.info("✅ Background scheduler started successfully!")
+        except Exception as e:
+            logger.error(f"❌ Background scheduler failed to start: {e}")
+            # Continue without scheduler
+        
         logger.info("=" * 60)
         logger.info("🎉 TruthLens startup complete!")
         
@@ -495,6 +554,15 @@ async def startup_event():
 async def shutdown_event():
     """Clean up on shutdown"""
     global multi_source_checker
+    
+    # Stop background scheduler
+    try:
+        await stop_background_scheduler()
+        logger.info("⏰ Background scheduler stopped")
+    except Exception as e:
+        logger.error(f"❌ Error stopping scheduler: {e}")
+    
+    # Close API sessions
     if multi_source_checker:
         await multi_source_checker.close()
         logger.info("🔄 API sessions closed")
@@ -1239,6 +1307,521 @@ async def get_api_documentation():
             "audio_support": "Requires librosa and transformers for audio processing"
         }
     }
+
+# ===================== TRENDING CLAIMS API ENDPOINTS =====================
+
+@app.get("/api/trending-claims", response_model=TrendingClaimsListResponse)
+async def get_trending_claims(
+    page: int = 1,
+    limit: int = 20,
+    category: Optional[str] = None,
+    status: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
+    """Get list of trending claims with pagination and filtering"""
+    try:
+        # Calculate offset
+        offset = (page - 1) * limit
+        
+        # Build query
+        query = db.query(TrendingClaim)
+        
+        # Apply filters
+        if category:
+            query = query.filter(TrendingClaim.category == category)
+        if status:
+            query = query.filter(TrendingClaim.status == status)
+        
+        # Get total count
+        total = query.count()
+        
+        # Get claims ordered by trending score
+        claims = query.order_by(desc(TrendingClaim.trending_score))\
+                     .offset(offset).limit(limit).all()
+        
+        # Get available categories
+        categories = db.query(TrendingClaim.category).distinct().all()
+        categories = [cat[0] for cat in categories]
+        
+        # Convert to response format
+        claim_responses = []
+        for claim in claims:
+            claim_responses.append(TrendingClaimResponse(
+                id=claim.id,
+                claim_text=claim.claim_text,
+                title=claim.title,
+                category=claim.category,
+                verdict=claim.verdict,
+                confidence=claim.confidence,
+                explanation=claim.explanation[:200] + "..." if claim.explanation and len(claim.explanation) > 200 else claim.explanation,
+                source_type=claim.source_type,
+                trending_score=claim.trending_score,
+                view_count=claim.view_count,
+                share_count=claim.share_count,
+                status=claim.status,
+                discovered_at=claim.discovered_at.isoformat(),
+                processed_at=claim.processed_at.isoformat() if claim.processed_at else None,
+                tags=claim.tags
+            ))
+        
+        return TrendingClaimsListResponse(
+            claims=claim_responses,
+            total=total,
+            page=page,
+            limit=limit,
+            categories=categories
+        )
+        
+    except Exception as e:
+        logger.error(f"Error fetching trending claims: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch trending claims")
+
+@app.get("/api/trending-claims/{claim_id}", response_model=TrendingClaimDetailResponse)
+async def get_trending_claim_detail(
+    claim_id: int,
+    db: Session = Depends(get_db)
+):
+    """Get detailed information about a specific trending claim"""
+    try:
+        # Get claim
+        claim = db.query(TrendingClaim).filter(TrendingClaim.id == claim_id).first()
+        
+        if not claim:
+            raise HTTPException(status_code=404, detail="Claim not found")
+        
+        # Increment view count
+        claim.view_count += 1
+        db.commit()
+        
+        # Get sources - separate fact-checking sources from original news sources
+        all_sources = db.query(ClaimSource).filter(ClaimSource.claim_id == claim_id).all()
+        
+        # Separate sources by type for better organization
+        fact_check_sources = []
+        original_sources = []
+        
+        for source in all_sources:
+            source_info = {
+                "name": source.source_name,
+                "url": source.source_url,
+                "type": source.source_type,
+                "author": source.author,
+                "published_at": source.published_at.isoformat() if source.published_at else None,
+                "reliability": source.source_reliability
+            }
+            
+            if source.source_type == 'fact_check_source':
+                fact_check_sources.append(source_info)
+            else:
+                original_sources.append(source_info)
+        
+        # Prioritize fact-checking sources for display (what user expects to see)
+        source_data = fact_check_sources + original_sources
+        
+        return TrendingClaimDetailResponse(
+            id=claim.id,
+            claim_text=claim.claim_text,
+            title=claim.title,
+            category=claim.category,
+            verdict=claim.verdict,
+            confidence=claim.confidence,
+            explanation=claim.explanation,
+            evidence_summary=claim.evidence_summary,
+            source_type=claim.source_type,
+            source_url=claim.source_url,
+            trending_score=claim.trending_score,
+            controversy_level=claim.controversy_level,
+            view_count=claim.view_count,
+            share_count=claim.share_count,
+            status=claim.status,
+            processing_time=claim.processing_time,
+            discovered_at=claim.discovered_at.isoformat(),
+            processed_at=claim.processed_at.isoformat() if claim.processed_at else None,
+            tags=claim.tags,
+            keywords=claim.keywords,
+            related_entities=claim.related_entities,
+            sources=source_data
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching claim detail: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch claim details")
+
+@app.post("/api/trigger-aggregation", response_model=AggregationTriggerResponse)
+@limiter.limit("5/minute")  # Limit to prevent abuse
+async def trigger_news_aggregation(request: Request):
+    """Manually trigger news aggregation and claim discovery"""
+    try:
+        start_time = time.time()
+        
+        logger.info("🔍 Manual news aggregation triggered")
+        
+        # Initialize aggregator
+        aggregator = NewsAggregator()
+        
+        # Discover trending claims
+        claims = await aggregator.discover_trending_claims(limit=50)
+        
+        # Save to database
+        saved_count = await save_claims_to_database(claims)
+        
+        execution_time = time.time() - start_time
+        
+        logger.info(f"✅ Manual aggregation complete: {len(claims)} discovered, {saved_count} saved")
+        
+        return AggregationTriggerResponse(
+            message="News aggregation completed successfully",
+            claims_discovered=len(claims),
+            claims_saved=saved_count,
+            execution_time=execution_time
+        )
+        
+    except Exception as e:
+        logger.error(f"Error in manual aggregation: {e}")
+        raise HTTPException(status_code=500, detail=f"Aggregation failed: {str(e)}")
+
+@app.get("/api/claims/categories")
+async def get_claim_categories(db: Session = Depends(get_db)):
+    """Get available claim categories with statistics"""
+    try:
+        # Get category statistics
+        stats = db.query(
+            TrendingClaim.category,
+            func.count(TrendingClaim.id).label('total'),
+            func.count(func.nullif(TrendingClaim.verdict, None)).label('processed'),
+            func.avg(TrendingClaim.controversy_level).label('avg_controversy'),
+            func.max(TrendingClaim.discovered_at).label('most_recent')
+        ).group_by(TrendingClaim.category).all()
+        
+        categories = []
+        for stat in stats:
+            categories.append(CategoryStatsResponse(
+                category=stat.category,
+                total_claims=stat.total,
+                processed_claims=stat.processed,
+                avg_controversy=float(stat.avg_controversy) if stat.avg_controversy else 0.0,
+                most_recent=stat.most_recent.isoformat() if stat.most_recent else None
+            ))
+        
+        return {
+            "categories": categories,
+            "total_categories": len(categories)
+        }
+        
+    except Exception as e:
+        logger.error(f"Error fetching categories: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch categories")
+
+@app.get("/api/claims/analytics")
+async def get_claims_analytics(
+    days: int = 7,
+    db: Session = Depends(get_db)
+):
+    """Get analytics for trending claims"""
+    try:
+        # Calculate date range
+        end_date = datetime.utcnow()
+        start_date = end_date - timedelta(days=days)
+        
+        # Basic statistics
+        total_claims = db.query(TrendingClaim).count()
+        new_claims = db.query(TrendingClaim).filter(
+            TrendingClaim.discovered_at >= start_date
+        ).count()
+        processed_claims = db.query(TrendingClaim).filter(
+            TrendingClaim.status == 'completed'
+        ).count()
+        
+        # Top categories
+        top_categories = db.query(
+            TrendingClaim.category,
+            func.count(TrendingClaim.id).label('count')
+        ).group_by(TrendingClaim.category)\
+         .order_by(desc('count')).limit(5).all()
+        
+        # Trending score distribution
+        avg_trending = db.query(func.avg(TrendingClaim.trending_score)).scalar()
+        
+        return {
+            "period_days": days,
+            "total_claims": total_claims,
+            "new_claims": new_claims,
+            "processed_claims": processed_claims,
+            "processing_rate": round(processed_claims / total_claims * 100, 1) if total_claims > 0 else 0,
+            "avg_trending_score": float(avg_trending) if avg_trending else 0.0,
+            "top_categories": [{"category": cat[0], "count": cat[1]} for cat in top_categories]
+        }
+        
+    except Exception as e:
+        logger.error(f"Error fetching analytics: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch analytics")
+
+@app.post("/api/claims/{claim_id}/share")
+async def increment_share_count(
+    claim_id: int,
+    db: Session = Depends(get_db)
+):
+    """Increment share count for a claim"""
+    try:
+        claim = db.query(TrendingClaim).filter(TrendingClaim.id == claim_id).first()
+        
+        if not claim:
+            raise HTTPException(status_code=404, detail="Claim not found")
+        
+        claim.share_count += 1
+        db.commit()
+        
+        return {"message": "Share count updated", "new_count": claim.share_count}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating share count: {e}")
+        raise HTTPException(status_code=500, detail="Failed to update share count")
+
+@app.get("/api/claims/{claim_id}/social-context")
+async def get_claim_social_context(
+    claim_id: int,
+    db: Session = Depends(get_db)
+):
+    """Get Grok-powered social context for a specific claim"""
+    try:
+        # Get claim
+        claim = db.query(TrendingClaim).filter(TrendingClaim.id == claim_id).first()
+        
+        if not claim:
+            raise HTTPException(status_code=404, detail="Claim not found")
+        
+        # Check if Grok is available
+        if not is_api_available("grok"):
+            return {
+                "available": False,
+                "message": "Grok API not configured",
+                "recommendation": "Add GROK_API_KEY to enable social context analysis"
+            }
+        
+        # Get enhanced social context
+        enhancement = await enhance_trending_claim_with_grok(claim.claim_text, claim.title)
+        
+        if enhancement:
+            return {
+                "available": True,
+                "claim_id": claim_id,
+                "social_context": enhancement.get('social_context', {}),
+                "viral_metrics": enhancement.get('viral_metrics', {}),
+                "analysis_timestamp": datetime.now().isoformat()
+            }
+        else:
+            return {
+                "available": True,
+                "claim_id": claim_id,
+                "social_context": {},
+                "viral_metrics": {},
+                "error": "Failed to analyze social context"
+            }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting social context: {e}")
+        raise HTTPException(status_code=500, detail="Failed to analyze social context")
+
+@app.post("/api/claims/{claim_id}/enhance-with-grok")
+@limiter.limit("10/minute")
+async def enhance_claim_with_grok(
+    claim_id: int,
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    """Enhance a claim's fact-check with Grok social context"""
+    try:
+        # Get claim
+        claim = db.query(TrendingClaim).filter(TrendingClaim.id == claim_id).first()
+        
+        if not claim:
+            raise HTTPException(status_code=404, detail="Claim not found")
+        
+        if not is_api_available("grok"):
+            raise HTTPException(status_code=503, detail="Grok API not available")
+        
+        # Only enhance if claim has been fact-checked
+        if not claim.verdict:
+            raise HTTPException(status_code=400, detail="Claim must be fact-checked first")
+        
+        logger.info(f"🌐 Enhancing claim {claim_id} with Grok social context")
+        
+        # Get social enhancement
+        async with GrokSocialAnalyzer() as grok:
+            social_enhancement = await grok.enhance_fact_check_with_social_context(
+                claim.claim_text,
+                claim.verdict,
+                claim.explanation or ""
+            )
+        
+        # Update claim with social context
+        if social_enhancement:
+            # Store social context in evidence_summary or create new field
+            existing_evidence = claim.evidence_summary or ""
+            social_summary = f"\n\n--- SOCIAL CONTEXT ---\n"
+            social_summary += f"Social Reception: {social_enhancement.get('social_reception', 'N/A')}\n"
+            social_summary += f"Community Response: {social_enhancement.get('community_response', 'N/A')}\n"
+            
+            if social_enhancement.get('expert_reactions'):
+                social_summary += f"Expert Reactions: {'; '.join(social_enhancement['expert_reactions'])}\n"
+            
+            if social_enhancement.get('platform_actions'):
+                social_summary += f"Platform Actions: {social_enhancement['platform_actions']}\n"
+            
+            claim.evidence_summary = existing_evidence + social_summary
+            db.commit()
+            
+            logger.info(f"✅ Enhanced claim {claim_id} with Grok social context")
+            
+            return {
+                "message": "Claim enhanced with social context",
+                "social_enhancement": social_enhancement,
+                "updated_at": datetime.now().isoformat()
+            }
+        else:
+            raise HTTPException(status_code=500, detail="Failed to get social enhancement")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error enhancing claim with Grok: {e}")
+        raise HTTPException(status_code=500, detail="Enhancement failed")
+
+@app.get("/api/grok/trending-claims")
+async def get_grok_trending_claims(
+    categories: Optional[str] = None
+):
+    """Get trending claims discovered by Grok from social media"""
+    try:
+        if not is_api_available("grok"):
+            return {
+                "available": False,
+                "claims": [],
+                "message": "Grok API not configured"
+            }
+        
+        # Parse categories
+        category_list = categories.split(',') if categories else ['health', 'politics', 'science']
+        
+        logger.info(f"🔥 Fetching Grok trending claims for categories: {category_list}")
+        
+        # Get trending claims from Grok
+        async with GrokSocialAnalyzer() as grok:
+            trending_claims = await grok.get_trending_misinformation(category_list)
+        
+        return {
+            "available": True,
+            "claims": trending_claims,
+            "categories_analyzed": category_list,
+            "count": len(trending_claims),
+            "analysis_timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting Grok trending claims: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get trending claims")
+
+@app.get("/api/grok/status")
+async def get_grok_status():
+    """Get Grok API status and capabilities"""
+    return {
+        "available": is_api_available("grok"),
+        "capabilities": {
+            "social_context_analysis": True,
+            "viral_metrics": True,
+            "trending_misinformation_detection": True,
+            "real_time_x_data": True,
+            "fact_check_enhancement": True
+        },
+        "endpoints": {
+            "social_context": "/api/claims/{id}/social-context",
+            "enhance_fact_check": "/api/claims/{id}/enhance-with-grok",
+            "trending_claims": "/api/grok/trending-claims"
+        },
+        "setup_instructions": "Add GROK_API_KEY to environment variables" if not is_api_available("grok") else "Ready to use"
+    }
+
+# ===================== SCHEDULER MANAGEMENT ENDPOINTS =====================
+
+@app.get("/api/scheduler/status")
+async def get_scheduler_status():
+    """Get background scheduler status and job information"""
+    try:
+        scheduler = await get_scheduler()
+        status = scheduler.get_status()
+        
+        return {
+            "status": status["status"],
+            "jobs": status.get("jobs", []),
+            "uptime": status.get("uptime"),
+            "enabled": True
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting scheduler status: {e}")
+        return {
+            "status": "error",
+            "jobs": [],
+            "uptime": None,
+            "enabled": False,
+            "error": str(e)
+        }
+
+@app.post("/api/scheduler/trigger/{job_id}")
+@limiter.limit("5/minute")
+async def trigger_scheduler_job(
+    request: Request,
+    job_id: str
+):
+    """Manually trigger a specific scheduled job"""
+    try:
+        scheduler = await get_scheduler()
+        success = await scheduler.trigger_job(job_id)
+        
+        if success:
+            return {
+                "message": f"Job '{job_id}' triggered successfully",
+                "job_id": job_id,
+                "triggered_at": datetime.utcnow().isoformat()
+            }
+        else:
+            raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found")
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error triggering job {job_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to trigger job: {str(e)}")
+
+@app.get("/api/scheduler/jobs")
+async def list_scheduler_jobs():
+    """List all scheduled jobs with their next run times"""
+    try:
+        scheduler = await get_scheduler()
+        status = scheduler.get_status()
+        
+        return {
+            "jobs": status.get("jobs", []),
+            "total_jobs": len(status.get("jobs", [])),
+            "scheduler_running": status["status"] == "running"
+        }
+        
+    except Exception as e:
+        logger.error(f"Error listing scheduler jobs: {e}")
+        return {
+            "jobs": [],
+            "total_jobs": 0,
+            "scheduler_running": False,
+            "error": str(e)
+        }
+
+# ===================== END TRENDING CLAIMS API ENDPOINTS =====================
 
 if __name__ == "__main__":
     import uvicorn

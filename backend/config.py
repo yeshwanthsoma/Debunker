@@ -28,6 +28,12 @@ class Settings(BaseSettings):
     anthropic_api_key: Optional[str] = Field(default=None)
     news_api_key: Optional[str] = Field(default=None)
     
+    # News Aggregation APIs
+    reddit_client_id: Optional[str] = Field(default=None)
+    reddit_secret: Optional[str] = Field(default=None)
+    twitter_bearer_token: Optional[str] = Field(default=None)
+    grok_api_key: Optional[str] = Field(default=None)
+    
     # OpenAI Configuration
     openai_model: str = Field(default="gpt-4")
     openai_max_tokens: int = Field(default=2000)
@@ -53,6 +59,28 @@ class Settings(BaseSettings):
     cache_ttl: int = Field(default=3600)
     enable_cache: bool = Field(default=True)
     
+    # Database Configuration
+    database_url: str = Field(default="sqlite:///./debunker.db")
+    database_pool_size: int = Field(default=5)
+    database_echo: bool = Field(default=False)
+    
+    # Railway Environment Detection
+    railway_environment: Optional[str] = Field(default=None)
+    
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        # Railway environment detection and PostgreSQL configuration
+        if self.railway_environment or os.getenv('DATABASE_URL'):
+            database_url = os.getenv('DATABASE_URL')
+            if database_url:
+                if database_url.startswith('postgres://'):
+                    # Fix for newer PostgreSQL drivers
+                    database_url = database_url.replace('postgres://', 'postgresql://', 1)
+                self.database_url = database_url
+                print(f"🚀 Railway environment detected - using PostgreSQL")
+            else:
+                print(f"💻 Local environment detected - using SQLite")
+    
     # CORS Settings
     cors_origins: list = Field(default=["*"])
     cors_allow_credentials: bool = Field(default=True)
@@ -77,7 +105,11 @@ def get_api_key(service: str) -> Optional[str]:
         "google_fact_check": settings.google_fact_check_api_key,
         "openai": settings.openai_api_key,
         "anthropic": settings.anthropic_api_key,
-        "news_api": settings.news_api_key
+        "news_api": settings.news_api_key,
+        "reddit_client_id": settings.reddit_client_id,
+        "reddit_secret": settings.reddit_secret,
+        "twitter_bearer_token": settings.twitter_bearer_token,
+        "grok": settings.grok_api_key
     }
     
     return key_mapping.get(service)
