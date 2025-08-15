@@ -772,7 +772,20 @@ async def analyze_claim(
         if not evidence_data.web_sources_consulted:
             web_sources = []
             if isinstance(fact_check_result, dict) and 'sources' in fact_check_result:
-                web_sources = [s.get('name', '') for s in fact_check_result['sources'] if s.get('type') == 'Web Source']
+                # Handle both dict and string sources
+                for s in fact_check_result['sources']:
+                    try:
+                        if isinstance(s, dict):
+                            if s.get('type') == 'Web Source':
+                                web_sources.append(s.get('name', ''))
+                        elif isinstance(s, str):
+                            # Handle string sources (likely from Grok)
+                            web_sources.append(s)
+                        else:
+                            logger.debug(f"Unexpected source type: {type(s)} - {s}")
+                    except Exception as source_error:
+                        logger.error(f"Error processing source: {source_error}")
+                        continue
             elif hasattr(fact_check_result, 'sources') and fact_check_result.sources:
                 web_sources = [s.get('name', '') for s in fact_check_result.sources if s.get('type') == 'Web Source']
             evidence_data.web_sources_consulted = web_sources
@@ -789,12 +802,27 @@ async def analyze_claim(
                 ))
         elif isinstance(fact_check_result, dict) and 'sources' in fact_check_result:
             for source in fact_check_result['sources']:
-                sources_data.append(SourceInfo(
-                    name=source.get('name', ''),
-                    type=source.get('type', ''),
-                    url=source.get('url'),
-                    rating=source.get('rating')
-                ))
+                try:
+                    if isinstance(source, dict):
+                        sources_data.append(SourceInfo(
+                            name=source.get('name', ''),
+                            type=source.get('type', ''),
+                            url=source.get('url'),
+                            rating=source.get('rating')
+                        ))
+                    elif isinstance(source, str):
+                        # Handle string sources
+                        sources_data.append(SourceInfo(
+                            name=source,
+                            type='Unknown Source',
+                            url=None,
+                            rating=None
+                        ))
+                    else:
+                        logger.debug(f"Unexpected SourceInfo type: {type(source)}")
+                except Exception as source_error:
+                    logger.error(f"Error creating SourceInfo: {source_error}")
+                    continue
         
         # Prepare credibility metrics
         credibility_analysis = fact_check_result.get('credibility_analysis', {})

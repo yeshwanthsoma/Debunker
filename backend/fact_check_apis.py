@@ -1248,7 +1248,14 @@ Respond with ONLY this JSON:
                 if isinstance(result.rating_details, dict):
                     evidence_assessment = result.rating_details.get('evidence_assessment', {})
                     if evidence_assessment:
-                        evaluations.update(evidence_assessment)
+                        # Handle both dict and string evidence assessments
+                        if isinstance(evidence_assessment, dict):
+                            evaluations.update(evidence_assessment)
+                        elif isinstance(evidence_assessment, str):
+                            # If it's a string (like from Grok), use claim as key
+                            evaluations[result.claim] = evidence_assessment
+                        else:
+                            logger.debug(f"Unexpected evidence_assessment type: {type(evidence_assessment)}")
             # Fallback to basic claim -> verdict mapping
             if result.claim:
                 evaluations[result.claim] = result.verdict
