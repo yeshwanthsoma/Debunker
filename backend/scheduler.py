@@ -233,13 +233,14 @@ class TrendingClaimsScheduler:
             # Initialize professional fact checker if APIs are available
             multi_source_checker = None
             try:
-                if is_api_available("google_fact_check") or is_api_available("openai") or is_api_available("anthropic"):
+                if is_api_available("google_fact_check") or is_api_available("openai") or is_api_available("anthropic") or is_api_available("grok"):
                     multi_source_checker = MultiSourceFactChecker()
                     logger.info("✅ Professional fact-checker initialized for trending claims")
                 else:
                     logger.info("⚠️ No professional fact-checking APIs available, using enhanced fallback")
             except Exception as e:
                 logger.warning(f"⚠️ Failed to initialize professional fact-checker: {e}")
+                multi_source_checker = None
             
             for claim in discovered_claims:
                 try:
@@ -278,40 +279,78 @@ class TrendingClaimsScheduler:
                                 
                                 # Store fact-checking source information
                                 sources = fact_check_result.get('sources', [])
-                                if sources:
-                                    source_names = [s.get('name', 'Unknown') for s in sources[:5]]
-                                    if not claim.evidence_summary:
-                                        claim.evidence_summary = f"Sources: {', '.join(source_names)}"
-                                    
-                                    # Store fact-checking sources in database for proper display
-                                    from database import ClaimSource
-                                    logger.info(f"📊 Processing {len(sources)} fact-checking sources for claim {claim.id}")
-                                    
-                                    for i, fc_source in enumerate(sources[:5]):  # Limit to top 5 fact-checking sources
-                                        logger.debug(f"   Source {i+1}: {fc_source}")
+                                if sources and isinstance(sources, list):
+                                    try:
+                                        # Validate and clean source data
+                                        valid_sources = []
+                                        for s in sources[:5]:  # Limit to top 5
+                                            if isinstance(s, dict) and s.get('name'):
+                                                valid_sources.append(s)
+                                            elif isinstance(s, str):
+                                                # Convert string to dict
+                                                valid_sources.append({'name': s, 'url': None, 'rating': 0.8})
+                                            else:
+                                                logger.debug(f"Skipping invalid source: {type(s)} - {s}")
                                         
-                                        # Get the actual fact-checking URL 
-                                        source_url = fc_source.get('url', '').strip()
-                                        source_name = fc_source.get('name', 'Unknown Fact-Checker')
-                                        
-                                        # Log what we found
-                                        if source_url:
-                                            logger.info(f"✅ Found URL for {source_name}: {source_url[:80]}...")
+                                        if valid_sources:
+                                            source_names = [s.get('name', 'Unknown') for s in valid_sources]
+                                            if not claim.evidence_summary:
+                                                claim.evidence_summary = f"Sources: {', '.join(source_names)}"
+                                            
+                                            # Store fact-checking sources in database for proper display
+                                            from database import ClaimSource
+                                            logger.info(f"📊 Processing {len(valid_sources)} valid fact-checking sources for claim {claim.id}")
+                                            
+                                            for i, fc_source in enumerate(valid_sources):
+                                                try:
+                                                    # Safely extract source data with validation
+                                                    source_name = str(fc_source.get('name', 'Unknown Fact-Checker')).strip()
+                                                    if not source_name:
+                                                        source_name = 'Unknown Fact-Checker'
+                                                    
+                                                    source_url = fc_source.get('url')
+                                                    if source_url:
+                                                        source_url = str(source_url).strip()
+                                                        if not source_url or not source_url.startswith('http'):
+                                                            source_url = None
+                                                    else:
+                                                        source_url = None
+                                                    
+                                                    # Get rating as float
+                                                    try:
+                                                        source_reliability = float(fc_source.get('rating', 0.8))
+                                                    except (ValueError, TypeError):
+                                                        source_reliability = 0.8
+                                                    
+                                                    # Log what we found
+                                                    if source_url:
+                                                        logger.info(f"✅ Source {i+1}: {source_name} - {source_url[:50]}...")
+                                                    else:
+                                                        logger.info(f"📄 Source {i+1}: {source_name} (no URL)")
+                                                    
+                                                    fact_check_source = ClaimSource(
+                                                        claim_id=claim.id,
+                                                        source_name=source_name,
+                                                        source_url=source_url,
+                                                        source_type='fact_check_source',
+                                                        original_content=f"Fact-checking source: {source_name}",
+                                                        extracted_claim=claim.claim_text,
+                                                        source_reliability=source_reliability,
+                                                        created_at=datetime.now()
+                                                    )
+                                                    db.add(fact_check_source)
+                                                    
+                                                except Exception as source_error:
+                                                    logger.error(f"❌ Error processing source {i+1}: {source_error}")
+                                                    logger.debug(f"   Problematic source: {fc_source}")
+                                                    continue
                                         else:
-                                            logger.warning(f"⚠️ No URL provided for {source_name} - storing as name only")
-                                            source_url = None  # Store as NULL in database
-                                        
-                                        fact_check_source = ClaimSource(
-                                            claim_id=claim.id,
-                                            source_name=source_name,
-                                            source_url=source_url,
-                                            source_type='fact_check_source',  # Distinguish from news source
-                                            original_content=f"Fact-checking source: {source_name}",
-                                            extracted_claim=claim.claim_text,
-                                            source_reliability=fc_source.get('rating', 0.8),  # Default reliability for fact-checkers
-                                            created_at=datetime.now()
-                                        )
-                                        db.add(fact_check_source)
+                                            logger.info(f"📄 No valid sources found for claim {claim.id}")
+                                            
+                                    except Exception as sources_error:
+                                        logger.error(f"❌ Error processing sources for claim {claim.id}: {sources_error}")
+                                        logger.debug(f"   Raw sources data: {sources}")
+                                        # Continue without sources
                                     
                             else:
                                 # Fallback for unexpected result format
@@ -348,6 +387,14 @@ class TrendingClaimsScheduler:
             db.rollback()  # Rollback transaction on error
             return 0
         finally:
+            # Always close the fact checker sessions
+            if multi_source_checker:
+                try:
+                    await multi_source_checker.close()
+                    logger.debug("✅ Multi-source checker sessions closed")
+                except Exception as e:
+                    logger.warning(f"⚠️ Error closing multi-source checker: {e}")
+            
             db.close()
     
     def _enhanced_heuristic_fact_check(self, claim):

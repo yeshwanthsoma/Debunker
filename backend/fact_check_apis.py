@@ -110,7 +110,8 @@ Respond with JSON array: ["claim1", "claim2"]"""
     async def _get_session(self):
         """Get or create aiohttp session"""
         if self.session is None:
-            self.session = aiohttp.ClientSession()
+            timeout = aiohttp.ClientTimeout(total=60, connect=30)
+            self.session = aiohttp.ClientSession(timeout=timeout)
         return self.session
     
     async def close(self):
@@ -290,7 +291,8 @@ class OpenAIFactChecker:
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json"
             }
-            self.session = aiohttp.ClientSession(headers=headers)
+            timeout = aiohttp.ClientTimeout(total=60, connect=30)
+            self.session = aiohttp.ClientSession(headers=headers, timeout=timeout)
         return self.session
     
     async def close(self):
@@ -498,12 +500,14 @@ Use your internet access to find the most current and authoritative information 
             
             # Extract sources from web research
             sources = []
-            if "web_sources_consulted" in result_data:
-                sources.extend([{
-                    "name": source,
-                    "type": "Web Source",
-                    "url": source if source.startswith("http") else None
-                } for source in result_data["web_sources_consulted"]])
+            if "web_sources_consulted" in result_data and isinstance(result_data["web_sources_consulted"], list):
+                for source in result_data["web_sources_consulted"]:
+                    if isinstance(source, str):
+                        sources.append({
+                            "name": source,
+                            "type": "Web Source",
+                            "url": source if source.startswith("http") else None
+                        })
             
             # Add standard AI analysis source
             sources.append({
@@ -655,6 +659,7 @@ class GrokFactChecker:
         """Close HTTP session"""
         if self.session:
             await self.session.close()
+            self.session = None
     
     async def analyze_claim(self, claim: str, context: Optional[str] = None) -> FactCheckResult:
         """Analyze a claim using Grok's real-time knowledge and social context"""
@@ -663,7 +668,8 @@ class GrokFactChecker:
         
         if not self.session:
             import aiohttp
-            self.session = aiohttp.ClientSession()
+            timeout = aiohttp.ClientTimeout(total=60, connect=30)
+            self.session = aiohttp.ClientSession(timeout=timeout)
         
         try:
             logger.info(f"🌐 Grok analyzing claim: '{claim[:60]}...'")
@@ -797,10 +803,21 @@ class MultiSourceFactChecker:
     
     async def close(self):
         """Close all API sessions"""
-        await self.google_checker.close()
-        await self.openai_checker.close()
+        try:
+            await self.google_checker.close()
+        except Exception as e:
+            logger.warning(f"Error closing Google checker: {e}")
+        
+        try:
+            await self.openai_checker.close()
+        except Exception as e:
+            logger.warning(f"Error closing OpenAI checker: {e}")
+        
         if self.grok_checker:
-            await self.grok_checker.close()
+            try:
+                await self.grok_checker.close()
+            except Exception as e:
+                logger.warning(f"Error closing Grok checker: {e}")
     
     async def comprehensive_fact_check(self, claim: str, context: Optional[str] = None) -> Dict[str, Any]:
         """Perform comprehensive fact-checking using multiple sources"""
