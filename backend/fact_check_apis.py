@@ -960,7 +960,7 @@ Respond with JSON only:
                 return self._create_fallback_result(claim)
 
 class GrokFactChecker:
-    """Grok-powered fact-checking using X.AI API"""
+    """Enhanced Grok-powered fact-checking using xAI Live Search API"""
     
     def __init__(self):
         self.api_key = get_api_key("grok")
@@ -974,81 +974,429 @@ class GrokFactChecker:
             await self.session.close()
             self.session = None
     
-    async def analyze_claim(self, claim: str, context: Optional[str] = None) -> FactCheckResult:
-        """Analyze a claim using Grok's real-time knowledge and social context"""
+    async def analyze_claim(self, claim: str, context: Optional[str] = None, stream: bool = False) -> FactCheckResult:
+        """Analyze a claim using xAI Live Search API with real-time web, news, and social media data"""
         if not self.api_key:
             raise ValueError("Grok API key not available")
         
         if not self.session:
             import aiohttp
-            timeout = aiohttp.ClientTimeout(total=60, connect=30)
+            timeout = aiohttp.ClientTimeout(total=120, connect=30)  # Increased timeout for live search
             self.session = aiohttp.ClientSession(timeout=timeout)
         
         try:
-            logger.info(f"🌐 Grok analyzing claim: '{claim[:60]}...'")
+            logger.info(f"🔍 Grok Live Search analyzing claim: '{claim[:60]}...'")
             
-            prompt = f"""You are a professional fact-checker with access to real-time social media data and current information. Analyze this claim:
-
-CLAIM: "{claim}"
-{f"CONTEXT: {context}" if context else ""}
-
-Provide a comprehensive fact-check response in JSON format. Use your access to real-time X/Twitter data and current information to assess:
-
-1. Current social media discussions about this topic
-2. Recent developments or news related to this claim  
-3. Expert opinions and official statements
-4. Evidence from credible sources
-5. Social consensus and misinformation patterns
-
-Respond with valid JSON only:
-{{
-    "verdict": "True|False|Misleading|Unverifiable",
-    "confidence": 0.85,
-    "explanation": "Detailed analysis including social context and real-time information",
-    "social_context": "Current social media discussion and expert reactions",
-    "evidence_assessment": "Key evidence and source reliability",
-    "misinformation_patterns": "Any related misinformation being spread"
-}}"""
-
+            prompt = self._create_live_search_prompt(claim, context)
+            
             headers = {
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json"
             }
             
+            # Enhanced payload with Live Search capabilities
             payload = {
                 "model": self.model,
                 "messages": [
                     {
                         "role": "system", 
-                        "content": "You are a professional fact-checker with real-time social media access. Respond only in valid JSON format."
+                        "content": "You are a professional fact-checker with real-time access to web, news, and social media data. Use live search to find current, authoritative information and provide evidence-based fact-checking with specific citations."
                     },
                     {
                         "role": "user", 
                         "content": prompt
                     }
                 ],
-                "stream": False,
-                "temperature": 0.3,
-                "max_tokens": 1500
+                "search_parameters": self._get_search_parameters(claim),
+                "stream": stream,
+                "temperature": 0.1,
+                "max_tokens": 2000
             }
+            
+            logger.info(f"🌐 Live Search sources: Web, X/Twitter, News, RSS")
+            logger.debug(f"Search parameters: {payload['search_parameters']}")
+            
+            import time
+            start_time = time.time()
             
             async with self.session.post(
                 f"{self.base_url}/chat/completions",
                 headers=headers,
                 json=payload,
-                timeout=60
+                timeout=120
             ) as response:
                 
+                search_time = time.time() - start_time
+                logger.info(f"📡 Grok Live Search Response: {response.status} (took {search_time:.2f}s)")
+                
                 if response.status == 200:
-                    data = await response.json()
-                    return self._parse_grok_response(data, claim)
+                    if stream:
+                        # Handle streaming response
+                        return await self._handle_streaming_response(response, claim, start_time)
+                    else:
+                        # Handle non-streaming response
+                        data = await response.json()
+                        
+                        # Log live search usage
+                        usage = data.get('usage', {})
+                        sources_used = usage.get('num_sources_used', 0)
+                        if sources_used > 0:
+                            cost = sources_used * 0.025  # $0.025 per source
+                            logger.info(f"💰 Live Search: {sources_used} sources used (cost: ${cost:.3f})")
+                        
+                        return self._parse_live_search_response(data, claim)
                 else:
                     error_text = await response.text()
-                    logger.error(f"❌ Grok API error {response.status}: {error_text}")
+                    logger.error(f"❌ Grok Live Search API error {response.status}: {error_text}")
                     return self._create_fallback_result(claim)
                     
         except Exception as e:
-            logger.error(f"❌ Grok fact-check failed: {e}")
+            logger.error(f"❌ Grok Live Search failed: {e}")
+            return self._create_fallback_result(claim)
+    
+    def _create_live_search_prompt(self, claim: str, context: Optional[str] = None) -> str:
+        """Create optimized prompt for xAI Live Search"""
+        from datetime import datetime, timedelta
+        
+        # Get current date for recent search filtering
+        current_date = datetime.now().strftime('%Y-%m-%d')
+        recent_date = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
+        
+        prompt = f"""Fact-check this claim using real-time live search: "{claim}"
+{f"Context: {context}" if context else ""}
+
+IMPORTANT: Respond ONLY with valid JSON. No additional text, no explanations, no markdown - just the JSON object.
+
+LIVE SEARCH STRATEGY:
+1. Search recent news for current developments and expert statements
+2. Check authoritative sources: Reuters, AP News, BBC, CNN, NPR
+3. Look for official statements from government agencies and institutions  
+4. Search X/Twitter for real-time reactions from experts and verified accounts
+5. Find fact-checking websites: Snopes, PolitiFact, FactCheck.org
+6. Cross-reference multiple sources for consensus
+
+SEARCH QUERIES TO PERFORM:
+- "{claim}" fact check recent news
+- "{claim}" expert statement official
+- "{claim}" Reuters OR "AP News" OR BBC
+- "{claim}" government agency response
+- "{claim}" scientific study research
+
+REQUIRED OUTPUT FORMAT (JSON):
+{{
+    "verdict": "True|False|Misleading|Unverifiable",
+    "confidence": 0.85,
+    "explanation": "Comprehensive analysis based on live search results",
+    "web_sources": [
+        {{
+            "source_name": "Publication Name",
+            "source_url": "https://complete-url.com/article",
+            "article_title": "Exact article title",
+            "date": "YYYY-MM-DD",
+            "finding": "What this source says about the claim",
+            "credibility": "High|Medium|Low",
+            "quote": "Relevant quote from article"
+        }}
+    ],
+    "social_media_context": [
+        {{
+            "platform": "X/Twitter",
+            "account": "@username",
+            "post_content": "Relevant social media post",
+            "engagement": "favorites/views count",
+            "date": "YYYY-MM-DD",
+            "relevance": "How this relates to the claim"
+        }}
+    ],
+    "news_coverage": "Current news coverage and consensus",
+    "expert_opinions": "Statements from subject matter experts",
+    "official_responses": "Government or institutional responses",
+    "misinformation_patterns": "Related false claims being spread",
+    "live_search_queries": ["query 1", "query 2", "query 3"],
+    "fact_check_date": "{current_date}",
+    "search_timeframe": "Past 7 days to current"
+}}
+
+CRITICAL REQUIREMENTS:
+- Use live search to find CURRENT information from the past week
+- MUST provide complete URLs for every web source
+- Include specific quotes and dates from sources
+- Check both mainstream news and social media for comprehensive coverage
+- Look for consensus across multiple authoritative sources
+- Be transparent about what live search found or couldn't find
+- Focus on factual claims, distinguish from opinions
+- Note if information is rapidly evolving or breaking news"""
+        return prompt
+    
+    def _get_search_parameters(self, claim: str) -> Dict:
+        """Configure comprehensive live search parameters"""
+        from datetime import datetime, timedelta
+        
+        # Set date range for recent information (past 7 days)
+        to_date = datetime.now().strftime('%Y-%m-%d')
+        from_date = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
+        
+        search_config = {
+            "mode": "on",
+            "return_citations": True,
+            "max_search_results": 5,  # Increased for comprehensive coverage
+        }
+        
+        return search_config
+    
+    def _parse_live_search_response(self, data: Dict, claim: str) -> FactCheckResult:
+        """Parse xAI Live Search response into FactCheckResult"""
+        try:
+            content = data.get('choices', [{}])[0].get('message', {}).get('content', '{}')
+            citations = data.get('citations', [])
+            
+            # Extract JSON block robustly
+            import re
+            json_match = re.search(r'\{[\s\S]*\}', content)
+            if json_match:
+                json_str = json_match.group(0)
+            else:
+                json_str = content
+            
+            # Clean up
+            json_str = json_str.replace('```json', '').replace('```', '').strip()
+            
+            logger.debug(f"Grok Live Search content: {json_str[:500]}...")
+            logger.info(f"Live Search citations found: {len(citations)}")
+        
+            
+            try:
+                parsed = json.loads(json_str)
+            except json.JSONDecodeError as e:
+                logger.warning(f"Failed to parse JSON from Grok Live Search: {e}")
+                # Fallback to text analysis
+                return self._extract_from_text_response(content, claim, citations)
+            
+            # Extract web sources with URLs from live search results
+            web_sources = []
+            live_search_sources = parsed.get("web_sources", [])
+            
+            for source in live_search_sources:
+                # Ensure source is a dictionary before calling .get()
+                if isinstance(source, dict):
+                    source_obj = {
+                        "name": source.get("source_name", "Unknown Source"),
+                        "url": source.get("source_url", ""),
+                        "type": "live_search_web",
+                        "title": source.get("article_title", ""),
+                        "date": source.get("date", ""),
+                        "credibility": source.get("credibility", "Medium"),
+                        "finding": source.get("finding", ""),
+                        "quote": source.get("quote", "")
+                    }
+                    web_sources.append(source_obj)
+                else:
+                    logger.warning(f"Invalid source type in web_sources: {type(source)} - {source}")
+            
+            # Add citations from xAI API
+            for citation in citations[:5]:  # Limit to top 5 citations
+                # Ensure citation is a dictionary before calling .get()
+                if isinstance(citation, dict):
+                    citation_obj = {
+                        "name": citation.get("title", "Live Search Result"),
+                        "url": citation.get("url", ""),
+                        "type": "live_search_citation",
+                        "title": citation.get("title", ""),
+                        "snippet": citation.get("snippet", "")
+                    }
+                    web_sources.append(citation_obj)
+                else:
+                    logger.warning(f"Invalid citation type: {type(citation)} - {citation}")
+            
+            # Extract social media context
+            social_context = parsed.get("social_media_context", [])
+            social_summary = "\n".join([
+                f"@{post.get('account', 'unknown')}: {post.get('post_content', '')[:100]}..."
+                for post in social_context[:3] if isinstance(post, dict)
+            ]) if social_context else "No significant social media discussion found"
+            
+            # Compile comprehensive explanation
+            explanation_parts = [
+                parsed.get("explanation", "Analysis completed using live search"),
+                f"\nNews Coverage: {parsed.get('news_coverage', 'Limited coverage found')}",
+                f"\nExpert Opinions: {parsed.get('expert_opinions', 'No expert statements located')}",
+                f"\nOfficial Responses: {parsed.get('official_responses', 'No official statements found')}"
+            ]
+            
+            if parsed.get('misinformation_patterns'):
+                explanation_parts.append(f"\nMisinformation Patterns: {parsed.get('misinformation_patterns')}")
+            
+            return FactCheckResult(
+                claim=claim,
+                verdict=parsed.get("verdict", "Unverifiable"),
+                confidence=float(parsed.get("confidence", 0.5)),
+                explanation="\n".join(explanation_parts),
+                sources=web_sources[:8],  # Limit to top 8 sources
+                provider="Grok Live Search (X.AI)",
+                timestamp=datetime.now(),
+                rating_details={
+                    "social_context": social_summary,
+                    "news_coverage": parsed.get("news_coverage", ""),
+                    "expert_opinions": parsed.get("expert_opinions", ""),
+                    "official_responses": parsed.get("official_responses", ""),
+                    "misinformation_patterns": parsed.get("misinformation_patterns", ""),
+                    "search_timeframe": parsed.get("search_timeframe", "Recent"),
+                    "live_search_queries": parsed.get("live_search_queries", [])
+                }
+            )
+            
+        except Exception as e:
+            logger.error(f"Error parsing Grok Live Search response: {e}")
+            return self._create_fallback_result(claim)
+    
+    def _extract_from_text_response(self, content: str, claim: str, citations: List[Dict]) -> FactCheckResult:
+        """Extract fact-check info from non-JSON text response with citations"""
+        try:
+            content_lower = content.lower()
+            
+            # Determine verdict from text
+            if "false" in content_lower and "misleading" not in content_lower:
+                verdict = "False"
+                confidence = 0.8
+            elif "true" in content_lower and "misleading" not in content_lower:
+                verdict = "True"
+                confidence = 0.8
+            elif "misleading" in content_lower:
+                verdict = "Misleading"
+                confidence = 0.7
+            else:
+                verdict = "Unverifiable"
+                confidence = 0.5
+            
+            # Extract sources from citations safely
+            sources = []
+            for citation in citations[:5]:
+                if isinstance(citation, dict):
+                    sources.append({
+                        "name": citation.get("title", "Live Search Result") if isinstance(citation.get("title"), str) else "Live Search Result",
+                        "url": citation.get("url", "") if isinstance(citation.get("url"), str) else "",
+                        "type": "live_search_citation",
+                        "title": citation.get("title", "") if isinstance(citation.get("title"), str) else "",
+                        "snippet": citation.get("snippet", "") if isinstance(citation.get("snippet"), str) else ""
+                    })
+                else:
+                    logger.warning(f"Invalid citation type: {type(citation)}")
+            
+            # Fallback sources if no citations
+            if not sources:
+                import re
+                urls = re.findall(r'https?://[^\s]+', content)
+                for i, url in enumerate(urls[:3]):
+                    sources.append({
+                        "name": f"Live Search Source {i+1}",
+                        "url": url.rstrip('.,;'),
+                        "type": "live_search_url",
+                        "title": ""
+                    })
+            
+            return FactCheckResult(
+                claim=claim,
+                verdict=verdict,
+                confidence=confidence,
+                explanation=content[:800] + "..." if len(content) > 800 else content,
+                sources=sources,
+                provider="Grok Live Search (Text)",
+                timestamp=datetime.now()
+            )
+            
+        except Exception as e:
+            logger.error(f"Error extracting from text response: {e}")
+            return self._create_fallback_result(claim)
+    
+    async def _handle_streaming_response(self, response, claim: str, start_time: float) -> FactCheckResult:
+        """Handle streaming Server-Sent Events from xAI Live Search API"""
+        try:
+            import json
+            import time
+            
+            logger.info("🔄 Processing streaming live search response...")
+            
+            full_content = ""
+            citations_found = []
+            live_searches_started = 0
+            live_searches_completed = 0
+            
+            async for line in response.content:
+                if not line:
+                    continue
+                    
+                line_str = line.decode('utf-8').strip()
+                if not line_str.startswith('data: '):
+                    continue
+                
+                data_str = line_str[6:]  # Remove 'data: ' prefix
+                if data_str == '[DONE]':
+                    break
+                
+                try:
+                    event_data = json.loads(data_str)
+                    event_type = event_data.get('type', '')
+                    
+                    # Log live search events
+                    if event_type == 'live_search.started':
+                        live_searches_started += 1
+                        search_query = event_data.get('query', 'Unknown query')
+                        logger.info(f"🔍 Live search {live_searches_started} started: {search_query[:50]}...")
+                    elif event_type == 'live_search.completed':
+                        live_searches_completed += 1
+                        sources_found = event_data.get('sources_found', 0)
+                        logger.info(f"✅ Live search {live_searches_completed} completed: {sources_found} sources found")
+                    
+                    # Collect text content
+                    elif event_type == 'content.delta':
+                        delta = event_data.get('delta', '')
+                        if delta:
+                            full_content += delta
+                    
+                    # Collect citations
+                    elif event_type == 'citation.found':
+                        citation = event_data.get('citation', {})
+                        if citation:
+                            citations_found.append(citation)
+                            logger.debug(f"📎 Citation found: {citation.get('title', 'Unknown')}")
+                    
+                    # Log when response is complete
+                    elif event_type == 'response.completed':
+                        total_time = time.time() - start_time
+                        logger.info(f"🎉 Streaming live search completed in {total_time:.2f}s")
+                        usage = event_data.get('usage', {})
+                        sources_used = usage.get('num_sources_used', 0)
+                        if sources_used > 0:
+                            cost = sources_used * 0.025
+                            logger.info(f"💰 Live search cost: {sources_used} sources = ${cost:.3f}")
+                        
+                except json.JSONDecodeError:
+                    continue  # Skip malformed JSON
+            
+            logger.info(f"🌐 Completed {live_searches_completed} live searches with {len(citations_found)} citations")
+            logger.debug(f"Full streaming content: {full_content[:500]}...")
+            
+            # Parse the final content with citations
+            if not full_content:
+                logger.error("No content received from streaming live search")
+                return self._create_fallback_result(claim)
+            
+            # Create a mock response data structure for parsing
+            mock_data = {
+                'choices': [{
+                    'message': {
+                        'content': full_content
+                    }
+                }],
+                'citations': citations_found
+            }
+            
+            result = self._parse_live_search_response(mock_data, claim)
+            logger.info(f"✅ Streaming live search analysis complete: {result.verdict} (confidence: {result.confidence:.2f})")
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error handling streaming live search response: {e}")
             return self._create_fallback_result(claim)
     
     def _parse_grok_response(self, data: Dict, claim: str) -> FactCheckResult:
