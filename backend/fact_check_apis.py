@@ -281,7 +281,7 @@ class OpenAIFactChecker:
     
     def __init__(self):
         self.api_key = get_api_key("openai")
-        self.model = "gpt-4o"  # Using GPT-4o for internet access
+        self.model = "gpt-4o"  # Using 4o for internet access
         self.session = None
     
     async def _get_session(self):
@@ -300,13 +300,13 @@ class OpenAIFactChecker:
         if self.session:
             await self.session.close()
     
-    async def analyze_claim(self, claim: str, context: Optional[str] = None) -> FactCheckResult:
-        """Analyze a claim using OpenAI"""
+    async def analyze_claim(self, claim: str, context: Optional[str] = None, stream: bool = False) -> FactCheckResult:
+        """Analyze a claim using OpenAI /v1/responses API with web search"""
         if not is_api_available("openai"):
             logger.warning("🔑 OpenAI API key not available")
             return self._create_fallback_result(claim)
         
-        logger.info(f"🤖 CALLING OpenAI GPT-4 API")
+        logger.info(f"🤖 CALLING OpenAI /v1/responses API with Web Search")
         logger.info(f"   Claim: '{claim[:100]}{'...' if len(claim) > 100 else ''}'")
         logger.info(f"   Context: {'Yes' if context else 'No'}")
         logger.info(f"   Model: {self.model}")
@@ -314,25 +314,19 @@ class OpenAIFactChecker:
         try:
             session = await self._get_session()
             
-            prompt = self._create_fact_check_prompt(claim, context)
+            prompt = self._create_web_search_prompt(claim, context)
             
             payload = {
                 "model": self.model,
-                "messages": [
-                    {"role": "system", "content": "You are a professional fact-checker with internet access. Use web browsing to find current, authoritative sources and provide evidence-based assessments with specific citations."},
-                    {"role": "user", "content": prompt}
-                ],
-                "max_tokens": 1500,
-                "temperature": 0.1,
+                "input": prompt,
+                "instructions": "You are a professional fact-checker with real-time internet access. Use web search to find current, authoritative sources and provide evidence-based fact-checking with specific citations.",
                 "tools": [
-                    {
-                        "type": "function",
-                        "function": {
-                            "name": "web_search",
-                            "description": "Search the internet for current information"
-                        }
-                    }
-                ]
+                    {"type": "web_search"}
+                ],
+                "max_output_tokens": 1500,
+                "temperature": 0.1,
+                "store": True,
+                "stream": stream
             }
             
             logger.debug(f"   Prompt length: {len(prompt)} characters")
@@ -340,38 +334,34 @@ class OpenAIFactChecker:
             import time
             start_time = time.time()
             
-            async with session.post("https://api.openai.com/v1/chat/completions", json=payload) as response:
+            async with session.post("https://api.openai.com/v1/responses", json=payload) as response:
                 api_time = time.time() - start_time
                 logger.info(f"📡 OpenAI API Response: {response.status} (took {api_time:.2f}s)")
                 
                 if response.status == 200:
-                    data = await response.json()
-                    
-                    # Log token usage
-                    usage = data.get('usage', {})
-                    if usage:
-                        logger.info(f"   Tokens - Prompt: {usage.get('prompt_tokens', 0)}, Completion: {usage.get('completion_tokens', 0)}, Total: {usage.get('total_tokens', 0)}")
-                    
-                    # Check for tool calls first before parsing
-                    message = data.get("choices", [{}])[0].get("message", {})
-                    tool_calls = message.get("tool_calls", [])
-                    
-                    if tool_calls:
-                        logger.info(f"🌐 OpenAI used {len(tool_calls)} web searches - following up for final response...")
-                        try:
-                            result = await self._handle_tool_calls(tool_calls, claim, prompt, session)
-                            logger.info(f"✅ OpenAI tool-based analysis complete: {result.verdict} (confidence: {result.confidence:.2f})")
-                            return result
-                        except Exception as e:
-                            logger.error(f"❌ Tool call handling failed: {e}")
-                            # Fallback to analysis without tools
-                            result = await self._analyze_without_tools(claim, session, prompt)
-                            logger.info(f"✅ OpenAI fallback analysis complete: {result.verdict} (confidence: {result.confidence:.2f})")
-                            return result
+                    if stream:
+                        # Handle streaming response
+                        return await self._handle_streaming_response(response, claim, start_time)
                     else:
-                        # Standard response parsing
-                        result = self._parse_openai_response(data, claim)
-                        logger.info(f"✅ OpenAI analysis complete: {result.verdict} (confidence: {result.confidence:.2f})")
+                        # Handle non-streaming response
+                        data = await response.json()
+                        
+                        # Log token usage for /v1/responses format
+                        usage = data.get('usage', {})
+                        if usage:
+                            input_tokens = usage.get('input_tokens', 0)
+                            output_tokens = usage.get('output_tokens', 0)
+                            total_tokens = usage.get('total_tokens', input_tokens + output_tokens)
+                            logger.info(f"   Tokens - Input: {input_tokens}, Output: {output_tokens}, Total: {total_tokens}")
+                        
+                        # Log web search activity
+                        web_searches = self._count_web_searches(data)
+                        if web_searches > 0:
+                            logger.info(f"🌐 Performed {web_searches} web searches for real-time information")
+                        
+                        # Parse /v1/responses format
+                        result = self._parse_responses_api_data(data, claim)
+                        logger.info(f"✅ OpenAI web search analysis complete: {result.verdict} (confidence: {result.confidence:.2f})")
                         return result
                 else:
                     error_text = await response.text()
@@ -460,6 +450,329 @@ CLAIM: "Vaccines are effective at preventing diseases they target."
 
 Use your internet access to find the most current and authoritative information available."""
         return prompt
+    
+    def _create_web_search_prompt(self, claim: str, context: Optional[str] = None) -> str:
+        """Create an optimized prompt for the /v1/responses API with web search"""
+        from datetime import datetime
+        
+        prompt = f"""Fact-check this claim using real-time web search: "{claim}"
+{f"Context: {context}" if context else ""}
+
+SEARCH STRATEGY:
+1. Search for recent news and information about this claim
+2. Check authoritative sources: Reuters, AP News, BBC, government agencies
+3. Look for fact-checking websites: Snopes, PolitiFact, FactCheck.org
+4. Find scientific studies and peer-reviewed research if applicable
+5. Cross-reference multiple reliable sources
+
+SEARCH QUERIES TO USE:
+- "{claim}" fact check
+- "{claim}" Reuters OR "AP News" OR BBC
+- "{claim}" scientific study research
+- "{claim}" government official statement
+
+REQUIRED OUTPUT FORMAT (JSON):
+{{
+    "verdict": "True|False|Misleading|Unverifiable",
+    "confidence": 0.85,
+    "explanation": "Detailed analysis based on web search results",
+    "primary_claims": ["main factual assertion 1", "main factual assertion 2"],
+    "evidence_found": [
+        {{
+            "source_name": "Source Publication Name",
+            "source_url": "https://complete-url-to-specific-article.com/article-title",
+            "article_title": "Exact title of the article or page",
+            "date": "YYYY-MM-DD",
+            "finding": "What this source says about the claim",
+            "credibility": "High|Medium|Low",
+            "quote": "Relevant quote from the article if available"
+        }}
+    ],
+    "web_searches_performed": ["search query 1", "search query 2"],
+    "reasoning": "Step-by-step logic connecting evidence to verdict",
+    "fact_check_date": "{datetime.now().strftime('%Y-%m-%d')}"
+}}
+
+CRITICAL REQUIREMENTS:
+- Use web search to find CURRENT information (2023-2025)
+- MUST provide complete URLs (https://...) for every source
+- Include exact article titles and publication dates
+- Provide specific quotes or excerpts from articles when available
+- Look for consensus across multiple authoritative sources
+- Be transparent about what you found or couldn't find
+- Focus on factual claims, ignore opinions or speculation
+
+URL EXAMPLES:
+- Good: "https://www.reuters.com/technology/musk-completes-twitter-takeover-2022-10-28/"
+- Good: "https://apnews.com/article/elon-musk-twitter-acquisition-123abc"
+- Bad: "Reuters" or "AP News" (no specific article URL)"""
+        return prompt
+    
+    def _count_web_searches(self, data: Dict) -> int:
+        """Count web search tool calls in the response"""
+        try:
+            web_search_count = 0
+            output = data.get('output', [])
+            for item in output:
+                if item.get('type') == 'tool_call':
+                    function = item.get('function', {})
+                    if function.get('name') == 'web_search':
+                        web_search_count += 1
+            return web_search_count
+        except Exception:
+            return 0
+    
+    def _parse_responses_api_data(self, data: Dict, claim: str) -> FactCheckResult:
+        """Parse /v1/responses API format into FactCheckResult"""
+        try:
+            # Extract the main text content from output array
+            output = data.get('output', [])
+            content = None
+            
+            for item in output:
+                if item.get('type') == 'message' and item.get('role') == 'assistant':
+                    content_parts = item.get('content', [])
+                    for part in content_parts:
+                        if part.get('type') == 'output_text':
+                            content = part.get('text', '')
+                            break
+                    if content:
+                        break
+            
+            if not content:
+                logger.error(f"No assistant message content found in /v1/responses output")
+                return self._create_fallback_result(claim)
+            
+            logger.debug(f"OpenAI /v1/responses content: {content[:500]}...")
+            
+            # Try to parse JSON response
+            try:
+                # Clean content - sometimes GPT adds markdown formatting
+                clean_content = content.strip()
+                if clean_content.startswith("```json"):
+                    clean_content = clean_content[7:]
+                if clean_content.endswith("```"):
+                    clean_content = clean_content[:-3]
+                clean_content = clean_content.strip()
+                
+                import json
+                parsed_data = json.loads(clean_content)
+                
+                # Extract data with fallbacks
+                verdict = parsed_data.get("verdict", "Unverifiable")
+                confidence = float(parsed_data.get("confidence", 0.5))
+                explanation = parsed_data.get("explanation", "Analysis completed with web search")
+                
+                # Extract evidence and sources with URLs
+                evidence_found = parsed_data.get("evidence_found", [])
+                web_sources = []
+                for evidence in evidence_found:
+                    source_name = evidence.get("source_name", evidence.get("source", "Unknown Source"))
+                    source_url = evidence.get("source_url", "")
+                    article_title = evidence.get("article_title", "")
+                    
+                    # Create source object with proper URL
+                    if source_url and source_url.startswith("http"):
+                        source_obj = {
+                            "name": source_name,
+                            "url": source_url,
+                            "type": "web_search",
+                            "title": article_title
+                        }
+                    else:
+                        # If no URL provided, use source name as fallback
+                        source_obj = {
+                            "name": source_name,
+                            "url": f"Web search: {source_name}",
+                            "type": "web_search",
+                            "title": article_title
+                        }
+                    web_sources.append(source_obj)
+                
+                # Fallback to other source fields if no evidence_found
+                if not web_sources:
+                    fallback_sources = parsed_data.get("web_sources_consulted", [])
+                    for source in fallback_sources:
+                        web_sources.append({
+                            "name": source,
+                            "url": f"Web search: {source}",
+                            "type": "web_search",
+                            "title": ""
+                        })
+                    
+                    if not web_sources:
+                        web_sources = [{
+                            "name": "Web Search Analysis",
+                            "url": "Multiple sources consulted",
+                            "type": "web_search",
+                            "title": ""
+                        }]
+                
+                # Extract web searches performed
+                searches_performed = parsed_data.get("web_searches_performed", [])
+                if searches_performed:
+                    logger.info(f"   Search queries used: {', '.join(searches_performed[:3])}...")
+                
+                logger.info(f"   Sources found: {len(web_sources)} web sources")
+                logger.info(f"   Verdict: {verdict} (confidence: {confidence:.2f})")
+                
+                return FactCheckResult(
+                    claim=claim,
+                    verdict=verdict,
+                    confidence=confidence,
+                    explanation=explanation,
+                    sources=web_sources[:5],  # Limit to top 5 sources, already formatted with URLs
+                    provider="OpenAI Web Search",
+                    timestamp=datetime.now()
+                )
+                
+            except json.JSONDecodeError as e:
+                logger.warning(f"Failed to parse JSON from OpenAI response: {e}")
+                logger.debug(f"Raw content: {content[:200]}...")
+                
+                # Fallback: try to extract basic info from text
+                return self._extract_from_text_response(content, claim)
+                
+        except Exception as e:
+            logger.error(f"Error parsing /v1/responses data: {e}")
+            return self._create_fallback_result(claim)
+    
+    def _extract_from_text_response(self, content: str, claim: str) -> FactCheckResult:
+        """Extract fact-check info from non-JSON text response"""
+        try:
+            content_lower = content.lower()
+            
+            # Determine verdict
+            if "false" in content_lower and "misleading" not in content_lower:
+                verdict = "False"
+                confidence = 0.8
+            elif "true" in content_lower and "misleading" not in content_lower:
+                verdict = "True"
+                confidence = 0.8
+            elif "misleading" in content_lower:
+                verdict = "Misleading" 
+                confidence = 0.7
+            else:
+                verdict = "Unverifiable"
+                confidence = 0.5
+            
+            # Extract URLs if present
+            import re
+            urls = re.findall(r'https?://[^\s]+', content)
+            
+            sources = []
+            if urls:
+                for i, url in enumerate(urls[:3]):
+                    sources.append({
+                        "name": f"Source {i+1}",
+                        "url": url.rstrip('.,;'),  # Remove trailing punctuation
+                        "type": "web_search",
+                        "title": ""
+                    })
+            else:
+                sources = [{
+                    "name": "Web Search Analysis",
+                    "url": "Multiple sources consulted",
+                    "type": "web_search",
+                    "title": ""
+                }]
+            
+            return FactCheckResult(
+                claim=claim,
+                verdict=verdict,
+                confidence=confidence,
+                explanation=content[:500] + "..." if len(content) > 500 else content,
+                sources=sources,
+                provider="OpenAI Web Search (Text)",
+                timestamp=datetime.now()
+            )
+            
+        except Exception as e:
+            logger.error(f"Error extracting from text response: {e}")
+            return self._create_fallback_result(claim)
+    
+    async def _handle_streaming_response(self, response, claim: str, start_time: float) -> FactCheckResult:
+        """Handle streaming Server-Sent Events from /v1/responses API"""
+        try:
+            import json
+            import time
+            
+            logger.info("🔄 Processing streaming response with real-time updates...")
+            
+            full_content = ""
+            web_searches_started = 0
+            web_searches_completed = 0
+            
+            async for line in response.content:
+                if not line:
+                    continue
+                    
+                line_str = line.decode('utf-8').strip()
+                if not line_str.startswith('data: '):
+                    continue
+                
+                data_str = line_str[6:]  # Remove 'data: ' prefix
+                if data_str == '[DONE]':
+                    break
+                
+                try:
+                    event_data = json.loads(data_str)
+                    event_type = event_data.get('type', '')
+                    
+                    # Log web search events
+                    if event_type == 'response.web_search_call.in_progress':
+                        web_searches_started += 1
+                        logger.info(f"🔍 Web search {web_searches_started} started...")
+                    elif event_type == 'response.web_search_call.completed':
+                        web_searches_completed += 1
+                        logger.info(f"✅ Web search {web_searches_completed} completed")
+                    
+                    # Collect text content
+                    elif event_type == 'response.output_text.delta':
+                        delta = event_data.get('delta', '')
+                        if delta:
+                            full_content += delta
+                    
+                    # Log when response is complete
+                    elif event_type == 'response.completed':
+                        total_time = time.time() - start_time
+                        logger.info(f"🎉 Streaming response completed in {total_time:.2f}s")
+                        usage = event_data.get('response', {}).get('usage', {})
+                        if usage:
+                            input_tokens = usage.get('input_tokens', 0)
+                            output_tokens = usage.get('output_tokens', 0)
+                            logger.info(f"   Tokens - Input: {input_tokens}, Output: {output_tokens}")
+                        
+                except json.JSONDecodeError:
+                    continue  # Skip malformed JSON
+            
+            logger.info(f"🌐 Completed {web_searches_completed} web searches")
+            logger.debug(f"Full streaming content: {full_content[:500]}...")
+            
+            # Parse the final content
+            if not full_content:
+                logger.error("No content received from streaming response")
+                return self._create_fallback_result(claim)
+            
+            # Create a mock response data structure for parsing
+            mock_data = {
+                'output': [{
+                    'type': 'message',
+                    'role': 'assistant',
+                    'content': [{
+                        'type': 'output_text',
+                        'text': full_content
+                    }]
+                }]
+            }
+            
+            result = self._parse_responses_api_data(mock_data, claim)
+            logger.info(f"✅ Streaming analysis complete: {result.verdict} (confidence: {result.confidence:.2f})")
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error handling streaming response: {e}")
+            return self._create_fallback_result(claim)
     
     def _parse_openai_response(self, data: Dict, claim: str) -> FactCheckResult:
         """Parse OpenAI response into FactCheckResult with improved error handling"""

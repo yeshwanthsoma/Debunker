@@ -39,7 +39,7 @@ class Settings(BaseSettings):
     grok_api_key: Optional[str] = Field(default=None)
     
     # OpenAI Configuration
-    openai_model: str = Field(default="gpt-4")
+    openai_model: str = Field(default="gpt-4o")
     openai_max_tokens: int = Field(default=2000)
     openai_temperature: float = Field(default=0.1)
     
