@@ -1684,30 +1684,10 @@ class MultiSourceFactChecker:
                         final_confidence = min(0.95, final_confidence + 0.1)
                         break
         
-        # Combine explanations with priority to OpenAI, then Grok, then Google
-        explanations = []
-        
-        # Prioritize OpenAI explanations (highest weight)
-        for result in openai_results:
-            if result.explanation:
-                explanations.append(f"[{result.provider}] {result.explanation}")
-        
-        # Add Grok explanations (real-time social context)
-        for result in grok_results:
-            if result.explanation:
-                explanations.append(f"[{result.provider}] {result.explanation}")
-        
-        # Add Google summary if meaningful
-        if processed_google.get("summary"):
-            explanations.append(f"[Google Fact Check Tools] {processed_google['summary']}")
-        
-        # Fallback to individual Google results if no summary
-        if not processed_google.get("summary") and google_results:
-            for result in google_results[:2]:  # Limit to top 2
-                if result.explanation:
-                    explanations.append(f"[{result.provider}] {result.explanation}")
-        
-        combined_explanation = " | ".join(explanations[:3])  # Limit to top 3
+        # Create unified explanation by synthesizing insights from all sources
+        combined_explanation = await self._create_unified_explanation(
+            claim, primary_verdict, openai_results, grok_results, processed_google
+        )
         
         # Collect all sources
         all_sources = []
@@ -1737,6 +1717,107 @@ class MultiSourceFactChecker:
             }
         }
     
+    async def _create_unified_explanation(self, claim: str, verdict: str, openai_results: List[FactCheckResult], 
+                                         grok_results: List[FactCheckResult], google_summary: Dict[str, Any]) -> str:
+        """Create a unified explanation by synthesizing insights from all sources"""
+        
+        # Collect key insights from each source
+        openai_insights = []
+        grok_insights = []
+        google_insights = []
+        
+        # Extract OpenAI insights (web search analysis)
+        for result in openai_results:
+            if result.explanation and result.explanation.strip():
+                openai_insights.append(result.explanation.strip())
+        
+        # Extract Grok insights (live social context)
+        for result in grok_results:
+            if result.explanation and result.explanation.strip():
+                grok_insights.append(result.explanation.strip())
+        
+        # Extract Google insights
+        if google_summary.get("summary"):
+            google_insights.append(google_summary["summary"])
+        
+        # Use OpenAI to synthesize a unified explanation if available
+        if is_api_available("openai") and (openai_insights or grok_insights or google_insights):
+            try:
+                openai_key = get_api_key("openai")
+                headers = {
+                    "Authorization": f"Bearer {openai_key}",
+                    "Content-Type": "application/json"
+                }
+                
+                # Prepare insights for synthesis
+                synthesis_input = {
+                    "web_analysis": openai_insights[0] if openai_insights else "",
+                    "social_context": grok_insights[0] if grok_insights else "",
+                    "fact_check_databases": google_insights[0] if google_insights else ""
+                }
+                
+                # Remove empty sections
+                filtered_insights = {k: v for k, v in synthesis_input.items() if v.strip()}
+                
+                if not filtered_insights:
+                    return f"This claim is assessed as {verdict.lower()} based on multi-source analysis."
+                
+                prompt = f"""Create a unified, coherent explanation for this fact-check verdict by synthesizing insights from multiple sources.
+
+CLAIM: "{claim}"
+VERDICT: {verdict}
+
+AVAILABLE INSIGHTS:
+{chr(10).join([f"{k.replace('_', ' ').title()}: {v}" for k, v in filtered_insights.items()])}
+
+REQUIREMENTS:
+1. Write ONE coherent paragraph that flows naturally
+2. Integrate insights from all sources seamlessly 
+3. Don't mention source names (OpenAI, Grok, Google) explicitly
+4. Focus on the factual conclusion and supporting evidence
+5. Keep it concise but comprehensive
+6. Make it sound like a single expert analysis, not a collection of separate opinions
+
+EXAMPLE FORMAT:
+"This claim is [verdict] based on comprehensive analysis. [Key evidence and reasoning in natural flowing sentences]..."
+
+Unified Explanation:"""
+
+                payload = {
+                    "model": "gpt-4o",
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": 300,
+                    "temperature": 0.3
+                }
+                
+                async with aiohttp.ClientSession() as session:
+                    async with session.post("https://api.openai.com/v1/chat/completions", 
+                                           headers=headers, json=payload, timeout=15) as response:
+                        if response.status == 200:
+                            data = await response.json()
+                            unified_explanation = data["choices"][0]["message"]["content"].strip()
+                            logger.info(f"✨ Created unified explanation: {unified_explanation[:100]}...")
+                            return unified_explanation
+                        else:
+                            logger.warning(f"Failed to create unified explanation: {response.status}")
+                            
+            except Exception as e:
+                logger.warning(f"Error creating unified explanation: {e}")
+        
+        # Fallback: Create simple unified explanation
+        primary_insight = ""
+        if openai_insights:
+            primary_insight = openai_insights[0]
+        elif grok_insights:
+            primary_insight = grok_insights[0]
+        elif google_insights:
+            primary_insight = google_insights[0]
+        
+        if primary_insight:
+            return f"This claim is {verdict.lower()}. {primary_insight[:200]}"
+        else:
+            return f"This claim is assessed as {verdict.lower()} based on multi-source analysis."
+
     async def _process_google_results_with_llm(self, google_results: List[FactCheckResult], claim: str) -> Dict[str, Any]:
         """Use LLM to interpret Google fact-check results contextually"""
         if not google_results:
