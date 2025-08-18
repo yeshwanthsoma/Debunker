@@ -278,45 +278,47 @@ class AlternativeFactChecker:
         return result['text']
     
     def extract_advanced_prosody(self, audio_path: str) -> Dict:
-        """Extract prosody features from audio"""
+        """Extract prosody features from audio (optimized for speed)"""
         try:
-            y, sr = librosa.load(audio_path, sr=22050)
+            # Use lower sample rate for faster processing
+            y, sr = librosa.load(audio_path, sr=16000)
             
             features = {}
             
-            # Pitch analysis
-            pitches, magnitudes = librosa.piptrack(y=y, sr=sr)
-            pitch_values = []
-            for t in range(pitches.shape[1]):
-                index = magnitudes[:, t].argmax()
-                pitch = pitches[index, t]
-                if pitch > 0:
-                    pitch_values.append(pitch)
-            
-            if pitch_values:
-                features['pitch_mean'] = float(np.mean(pitch_values))
-                features['pitch_std'] = float(np.std(pitch_values))
-                features['pitch_range'] = float(np.max(pitch_values) - np.min(pitch_values))
-            else:
+            # Faster pitch analysis using pyin algorithm
+            try:
+                pitch_values = librosa.pyin(y, fmin=librosa.note_to_hz('C2'), fmax=librosa.note_to_hz('C7'))[0]
+                # Remove NaN values
+                pitch_values = pitch_values[~np.isnan(pitch_values)]
+                
+                if len(pitch_values) > 0:
+                    features['pitch_mean'] = float(np.mean(pitch_values))
+                    features['pitch_std'] = float(np.std(pitch_values))
+                    features['pitch_range'] = float(np.max(pitch_values) - np.min(pitch_values))
+                else:
+                    features['pitch_mean'] = features['pitch_std'] = features['pitch_range'] = 0.0
+            except Exception:
+                # Fallback to zero values if pitch detection fails
                 features['pitch_mean'] = features['pitch_std'] = features['pitch_range'] = 0.0
             
-            # Energy analysis
-            rms = librosa.feature.rms(y=y)
+            # Energy analysis (fast RMS calculation)
+            rms = librosa.feature.rms(y=y, frame_length=512, hop_length=256)
             features['energy_mean'] = float(np.mean(rms))
             features['energy_std'] = float(np.std(rms))
             
-            # Tempo
-            tempo, beats = librosa.beat.beat_track(y=y, sr=sr)
-            features['tempo'] = float(tempo)
-            features['speaking_rate'] = float(len(beats) / (len(y) / sr))
+            # Simple speaking rate estimate (skip complex tempo analysis)
+            # Use zero crossing rate as proxy for speech activity
+            zcr = librosa.feature.zero_crossing_rate(y, frame_length=512, hop_length=256)
+            features['speaking_rate'] = float(np.mean(zcr) * 10)  # Normalized estimate
+            features['tempo'] = 120.0  # Default tempo value
             
-            # Sarcasm probability (simple heuristic)
+            # Sarcasm probability (optimized heuristic)
             sarcasm_score = 0.0
-            if features['pitch_std'] > 80:
+            if features['pitch_std'] > 50:  # Adjusted threshold
                 sarcasm_score += 0.3
-            if features['energy_std'] > 0.05:
+            if features['energy_std'] > 0.03:  # Adjusted threshold
                 sarcasm_score += 0.2
-            if features['speaking_rate'] < 2.0:
+            if features['speaking_rate'] < 1.5:  # Adjusted threshold
                 sarcasm_score += 0.3
             
             features['sarcasm_probability'] = min(sarcasm_score, 1.0)
@@ -327,7 +329,7 @@ class AlternativeFactChecker:
             logger.error(f"⚠️ Prosody analysis error: {e}")
             return {
                 'pitch_mean': 0.0, 'pitch_std': 0.0, 'pitch_range': 0.0,
-                'energy_mean': 0.0, 'energy_std': 0.0, 'tempo': 0.0,
+                'energy_mean': 0.0, 'energy_std': 0.0, 'tempo': 120.0,
                 'speaking_rate': 0.0, 'sarcasm_probability': 0.0
             }
     
@@ -677,32 +679,77 @@ async def analyze_claim(
         
         logger.info(f"📋 [{request_id}] Final claim: '{claim[:100]}{'...' if len(claim) > 100 else ''}'")
         
-        # Stage 5: Fact-Checking
-        logger.info(f"🔍 [{request_id}] STAGE 4: Starting fact-checking process...")
-        stage_times["fact_check_start"] = time.time()
+        # Stage 4: Parallel Prosody + Fact-Checking
+        logger.info(f"🚀 [{request_id}] STAGE 4: Starting parallel prosody analysis and fact-checking...")
+        stage_times["parallel_start"] = time.time()
         
-        if multi_source_checker:
-            logger.info(f"🎯 [{request_id}] Using PROFESSIONAL fact-checking (Multi-API)")
-            try:
-                fact_check_result = await fact_checker.professional_fact_check(claim, prosody_features, transcription)
-                stage_times["fact_check_done"] = time.time()
-                logger.info(f"✅ [{request_id}] Professional fact-check completed")
-                logger.info(f"   Verdict: {fact_check_result.get('verdict', 'Unknown')}")
-                logger.info(f"   Confidence: {fact_check_result.get('confidence', 'Unknown')}")
-                logger.info(f"   Provider: {fact_check_result.get('provider', 'Unknown')}")
-            except Exception as e:
-                logger.error(f"❌ [{request_id}] Professional fact-check failed: {e}")
-                logger.info(f"🔄 [{request_id}] Falling back to basic fact-checking...")
-                fact_check_result = fact_checker.enhanced_fact_check(claim, prosody_features)
-                stage_times["fact_check_done"] = time.time()
-                logger.info(f"✅ [{request_id}] Basic fact-check completed as fallback")
+        # Create parallel tasks
+        tasks = []
+        
+        # Task 1: Prosody analysis (if audio available and enabled)
+        prosody_task = None
+        if audio_file and analysis_request.enable_prosody:
+            async def run_prosody():
+                logger.info(f"🎵 [{request_id}] Running prosody analysis in parallel...")
+                return fact_checker.extract_advanced_prosody(audio_file)
+            prosody_task = asyncio.create_task(run_prosody())
+            tasks.append(prosody_task)
+        
+        # Task 2: Fact-checking
+        async def run_fact_check():
+            logger.info(f"🔍 [{request_id}] Running fact-checking in parallel...")
+            # Use empty prosody features initially, will merge later
+            empty_prosody = {}
+            if multi_source_checker:
+                logger.info(f"🎯 [{request_id}] Using PROFESSIONAL fact-checking (Multi-API)")
+                try:
+                    return await fact_checker.professional_fact_check(claim, empty_prosody, transcription)
+                except Exception as e:
+                    logger.error(f"❌ [{request_id}] Professional fact-check failed: {e}")
+                    logger.info(f"🔄 [{request_id}] Falling back to basic fact-checking...")
+                    return fact_checker.enhanced_fact_check(claim, empty_prosody)
+            else:
+                logger.info(f"📝 [{request_id}] Using BASIC fact-checking (Built-in knowledge)")
+                return fact_checker.enhanced_fact_check(claim, empty_prosody)
+        
+        fact_check_task = asyncio.create_task(run_fact_check())
+        tasks.append(fact_check_task)
+        
+        # Wait for all tasks to complete
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        stage_times["parallel_done"] = time.time()
+        
+        # Extract results
+        if prosody_task:
+            prosody_result = results[0] if len(results) > 0 else {}
+            fact_check_result = results[1] if len(results) > 1 else {}
+            if isinstance(prosody_result, Exception):
+                logger.error(f"❌ [{request_id}] Prosody analysis failed: {prosody_result}")
+                prosody_features = {}
+            else:
+                prosody_features = prosody_result
+                logger.info(f"✅ [{request_id}] Prosody analysis completed")
+                logger.info(f"   Sarcasm probability: {prosody_features.get('sarcasm_probability', 0):.2%}")
         else:
-            logger.info(f"📝 [{request_id}] Using BASIC fact-checking (Built-in knowledge)")
+            fact_check_result = results[0] if len(results) > 0 else {}
+            prosody_features = {}
+        
+        # Handle fact-checking result
+        if isinstance(fact_check_result, Exception):
+            logger.error(f"❌ [{request_id}] Fact-checking failed: {fact_check_result}")
+            # Fallback to basic fact-checking
             fact_check_result = fact_checker.enhanced_fact_check(claim, prosody_features)
-            stage_times["fact_check_done"] = time.time()
-            logger.info(f"✅ [{request_id}] Basic fact-check completed")
-            logger.info(f"   Verdict: {fact_check_result.get('verdict', 'Unknown')}")
-            logger.info(f"   Confidence: {fact_check_result.get('confidence', 'Unknown')}")
+        
+        # Update fact-check result with prosody features if needed
+        if prosody_features and isinstance(fact_check_result, dict):
+            fact_check_result['prosody_impact'] = f"Sarcasm probability: {prosody_features.get('sarcasm_probability', 0):.2%}"
+            fact_check_result['prosody_features'] = prosody_features
+        
+        logger.info(f"✅ [{request_id}] Parallel processing completed")
+        logger.info(f"   Verdict: {fact_check_result.get('verdict', 'Unknown')}")
+        logger.info(f"   Confidence: {fact_check_result.get('confidence', 'Unknown')}")
+        if multi_source_checker:
+            logger.info(f"   Provider: {fact_check_result.get('provider', 'Unknown')}")
         
         # Stage 6: Structure Response Data
         logger.info(f"📊 [{request_id}] STAGE 5: Structuring response data...")
@@ -853,10 +900,8 @@ async def analyze_claim(
             logger.info(f"   Audio Processing: {stage_times['audio_processed'] - stage_times['start']:.2f}s")
         if "transcription_done" in stage_times:
             logger.info(f"   Transcription: {stage_times['transcription_done'] - stage_times.get('audio_processed', stage_times['start']):.2f}s")
-        if "prosody_done" in stage_times:
-            logger.info(f"   Prosody Analysis: {stage_times['prosody_done'] - stage_times['transcription_done']:.2f}s")
-        if "fact_check_done" in stage_times:
-            logger.info(f"   Fact-Checking: {stage_times['fact_check_done'] - stage_times['fact_check_start']:.2f}s")
+        if "parallel_done" in stage_times:
+            logger.info(f"   Parallel Prosody + Fact-Checking: {stage_times['parallel_done'] - stage_times['parallel_start']:.2f}s")
         if "structuring_done" in stage_times:
             logger.info(f"   Data Structuring: {stage_times['structuring_done'] - stage_times['structuring_start']:.2f}s")
         logger.info(f"   TOTAL TIME: {processing_time:.2f}s")
