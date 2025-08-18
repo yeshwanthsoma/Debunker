@@ -61,6 +61,7 @@ python-dotenv==1.1.1
 # Database
 sqlalchemy==2.0.25
 alembic==1.13.1
+psycopg2-binary==2.9.9  # PostgreSQL adapter for Railway deployment
 
 # News and Social Media APIs
 newsapi-python==0.2.7
