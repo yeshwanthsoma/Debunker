@@ -89,10 +89,10 @@ class TrendingClaimsScheduler:
     def _setup_jobs(self):
         """Setup all scheduled jobs"""
         
-        # Job 1: Quick news check every 15 minutes (faster for testing)
+        # Job 1: Quick news check every 4 hours (optimized for cost efficiency)
         self.scheduler.add_job(
             func=self._quick_news_aggregation,
-            trigger=IntervalTrigger(minutes=15),
+            trigger=IntervalTrigger(hours=4),
             id='quick_news_check',
             name='Quick News Aggregation',
             replace_existing=True
@@ -100,29 +100,29 @@ class TrendingClaimsScheduler:
         
         # Note: Startup aggregation now runs directly in main.py startup, not as a scheduled job
         
-        # Job 2: Full news aggregation every 2 hours
+        # Job 2: Full news aggregation every 5 hours (reduced frequency)
         self.scheduler.add_job(
             func=self._full_news_aggregation,
-            trigger=IntervalTrigger(hours=2),
+            trigger=IntervalTrigger(hours=5),
             id='full_news_aggregation',
             name='Full News Aggregation',
             replace_existing=True
         )
         
-        # Job 3: Social media trending check every hour (if available)
+        # Job 3: Social media trending check every 4 hours (cost optimized)
         if is_api_available("grok") or is_api_available("reddit_client_id"):
             self.scheduler.add_job(
                 func=self._social_media_check,
-                trigger=IntervalTrigger(hours=1),
+                trigger=IntervalTrigger(hours=4),
                 id='social_media_check',
                 name='Social Media Trending Check',
                 replace_existing=True
             )
         
-        # Job 4: Professional fact-check pending claims every 30 minutes
+        # Job 4: Professional fact-check pending claims every 4 hours (reduced API usage)
         self.scheduler.add_job(
             func=self._professional_fact_check_new_claims,
-            trigger=IntervalTrigger(minutes=30),
+            trigger=IntervalTrigger(hours=4),
             id='fact_check_pending',
             name='Fact-Check Pending Claims',
             replace_existing=True
@@ -153,8 +153,8 @@ class TrendingClaimsScheduler:
         try:
             start_time = time.time()
             
-            # Discover trending claims with lower limit for speed
-            claims = await self.aggregator.discover_trending_claims(limit=20)
+            # Discover trending claims with reduced limit for cost efficiency
+            claims = await self.aggregator.discover_trending_claims(limit=10)
             
             if claims:
                 # Save to database
@@ -220,10 +220,10 @@ class TrendingClaimsScheduler:
         
         db = SessionLocal()
         try:
-            # Get recently discovered claims that need fact-checking
+            # Get recently discovered claims that need fact-checking (reduced for cost efficiency)
             discovered_claims = db.query(TrendingClaim).filter(
                 TrendingClaim.status == 'discovered'
-            ).limit(10).all()
+            ).limit(5).all()
             
             if not discovered_claims:
                 return 0
@@ -436,8 +436,8 @@ class TrendingClaimsScheduler:
         try:
             start_time = time.time()
             
-            # Discover trending claims with higher limit
-            claims = await self.aggregator.discover_trending_claims(limit=100)
+            # Discover trending claims with moderate limit for cost control  
+            claims = await self.aggregator.discover_trending_claims(limit=30)
             
             if claims:
                 # Save to database
