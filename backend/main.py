@@ -881,15 +881,15 @@ async def analyze_claim(
             flags=credibility_analysis.get('flags', [])
         )
         
-        # Generate dynamic debate content using LLM
+        # Generate dynamic debate content using LLM (DISABLED for performance)
         debate_data = None
-        if evidence_data.primary_claims and is_api_available("openai"):
-            try:
-                debate_data = await generate_dynamic_debate_content(claim, verdict_val, explanation_val, evidence_data)
-                logger.info(f"✅ Generated dynamic debate content")
-            except Exception as e:
-                logger.warning(f"Failed to generate debate content: {e}")
-                debate_data = None
+        # if evidence_data.primary_claims and is_api_available("openai"):
+        #     try:
+        #         debate_data = await generate_dynamic_debate_content(claim, verdict_val, explanation_val, evidence_data)
+        #         logger.info(f"✅ Generated dynamic debate content")
+        #     except Exception as e:
+        #         logger.warning(f"Failed to generate debate content: {e}")
+        #         debate_data = None
         
         stage_times["structuring_done"] = time.time()
         processing_time = time.time() - start_time
