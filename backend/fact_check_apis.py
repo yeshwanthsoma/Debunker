@@ -994,10 +994,10 @@ class GrokFactChecker:
                 "Content-Type": "application/json"
             }
             
-            # Enhanced payload with Agent Tools capabilities
+            # Enhanced payload with Agent Tools capabilities (Responses API format)
             payload = {
                 "model": self.model,
-                "messages": [
+                "input": [  # Responses API uses 'input' instead of 'messages'
                     {
                         "role": "system",
                         "content": "You are a professional fact-checker with real-time access to web and social media data. Use your search tools to find current, authoritative information and provide evidence-based fact-checking with specific citations."
@@ -1011,20 +1011,22 @@ class GrokFactChecker:
                     {"type": "web_search"},
                     {"type": "x_search"}
                 ],
-                "tool_choice": "auto",  # Let AI decide when to use tools
-                "stream": stream,
                 "temperature": 0.1,
                 "max_tokens": 2000
             }
 
+            # Add stream parameter if needed (Responses API handles this differently)
+            if stream:
+                payload["stream"] = True
+
             logger.info(f"🔧 Agent Tools enabled: web_search, x_search")
             logger.debug(f"Tools config: {payload['tools']}")
-            
+
             import time
             start_time = time.time()
-            
+
             async with self.session.post(
-                f"{self.base_url}/chat/completions",
+                f"{self.base_url}/responses",  # Changed from /chat/completions to /responses
                 headers=headers,
                 json=payload,
                 timeout=120
@@ -1134,10 +1136,51 @@ CRITICAL REQUIREMENTS:
         return prompt
 
     def _parse_agent_tools_response(self, data: Dict, claim: str) -> FactCheckResult:
-        """Parse xAI Agent Tools response into FactCheckResult"""
+        """Parse xAI Responses API response into FactCheckResult"""
         try:
-            content = data.get('choices', [{}])[0].get('message', {}).get('content', '{}')
-            citations = data.get('citations', [])
+            # Responses API format: extract from output[].content[].text
+            content = ''
+
+            # Navigate to output[0].content[0].text
+            outputs = data.get('output', [])
+            for output_item in outputs:
+                if output_item.get('type') == 'message':
+                    content_items = output_item.get('content', [])
+                    for content_item in content_items:
+                        # Look for 'output_text' or 'text' type content
+                        if content_item.get('type') in ['output_text', 'text']:
+                            content = content_item.get('text', '')
+                            if content:
+                                break
+                if content:
+                    break
+
+            # Fallback: try top-level fields (for backwards compatibility)
+            if not content:
+                if isinstance(data.get('text'), str):
+                    content = data['text']
+                elif data.get('output_text'):
+                    content = data['output_text']
+
+            # Extract citations from annotations in output structure
+            citations = []
+            outputs = data.get('output', [])
+            for output_item in outputs:
+                if output_item.get('type') == 'message':
+                    content_items = output_item.get('content', [])
+                    for content_item in content_items:
+                        annotations = content_item.get('annotations', [])
+                        for annotation in annotations:
+                            if annotation.get('type') == 'citation':
+                                citations.append({
+                                    'title': annotation.get('title', ''),
+                                    'url': annotation.get('url', ''),
+                                    'snippet': annotation.get('snippet', '')
+                                })
+
+            # Also check top-level citations field (if present)
+            if not citations:
+                citations = data.get('citations', [])
             
             # Extract JSON block robustly
             import re
@@ -1371,13 +1414,9 @@ CRITICAL REQUIREMENTS:
                 logger.error("No content received from streaming agent tools")
                 return self._create_fallback_result(claim)
 
-            # Create a mock response data structure for parsing
+            # Create a mock response data structure for parsing (Responses API format)
             mock_data = {
-                'choices': [{
-                    'message': {
-                        'content': full_content
-                    }
-                }],
+                'text': full_content,  # Responses API uses 'text' field
                 'citations': citations_found
             }
 

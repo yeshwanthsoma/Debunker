@@ -256,3 +256,41 @@ Update these files after migration:
 5. Update .env.example if needed
 
 **Migration completed on:** 2026-03-04
+
+---
+
+## Post-Migration Fix (422 Error)
+
+### Issue Discovered
+After initial deployment, encountered 422 error:
+```
+tools[0].type: unknown variant `web_search`, expected `function` or `live_search`
+```
+
+### Root Cause
+- Used `/v1/chat/completions` endpoint (legacy, doesn't support `web_search`/`x_search`)
+- Need to use `/v1/responses` endpoint (modern API with full Agent Tools support)
+
+### Additional Changes (2026-03-04)
+
+**`backend/fact_check_apis.py`:**
+- ✅ Changed endpoint: `/v1/chat/completions` → `/v1/responses`
+- ✅ Changed request format: `messages` → `input`
+- ✅ Updated response parsing:
+  - Old: `choices[0].message.content`
+  - New: `output_text` or `output[].content[].text`
+- ✅ Updated citation extraction from annotations
+- ✅ Updated streaming mock response format
+
+### API Comparison
+
+| Feature | Chat Completions (Legacy) | Responses (Modern) |
+|---------|---------------------------|-------------------|
+| Endpoint | `/v1/chat/completions` | `/v1/responses` |
+| Request | `messages` array | `input` array |
+| Response | `choices[0].message.content` | `output_text` |
+| Tool Types | `function`, `live_search` | `web_search`, `x_search`, etc. |
+| State | Stateless | Stateful (can continue with `id`) |
+| Status | Legacy, minimal updates | Active development |
+
+**Fix deployed on:** 2026-03-04
