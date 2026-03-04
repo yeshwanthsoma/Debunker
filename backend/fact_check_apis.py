@@ -960,12 +960,12 @@ Respond with JSON only:
                 return self._create_fallback_result(claim)
 
 class GrokFactChecker:
-    """Enhanced Grok-powered fact-checking using xAI Live Search API"""
-    
+    """Enhanced Grok-powered fact-checking using xAI Agent Tools API (web_search + x_search)"""
+
     def __init__(self):
         self.api_key = get_api_key("grok")
         self.base_url = "https://api.x.ai/v1"
-        self.model = "grok-4"
+        self.model = "grok-4-1-fast"  # Optimized for tool calling
         self.session = None
     
     async def close(self):
@@ -975,46 +975,50 @@ class GrokFactChecker:
             self.session = None
     
     async def analyze_claim(self, claim: str, context: Optional[str] = None, stream: bool = False) -> FactCheckResult:
-        """Analyze a claim using xAI Live Search API with real-time web, news, and social media data"""
+        """Analyze a claim using xAI Agent Tools API with real-time web and X/Twitter search"""
         if not self.api_key:
             raise ValueError("Grok API key not available")
-        
+
         if not self.session:
             import aiohttp
-            timeout = aiohttp.ClientTimeout(total=120, connect=30)  # Increased timeout for live search
+            timeout = aiohttp.ClientTimeout(total=120, connect=30)  # Increased timeout for agent tools
             self.session = aiohttp.ClientSession(timeout=timeout)
-        
+
         try:
-            logger.info(f"🔍 Grok Live Search analyzing claim: '{claim[:60]}...'")
-            
-            prompt = self._create_live_search_prompt(claim, context)
+            logger.info(f"🔧 Grok Agent Tools analyzing claim: '{claim[:60]}...'")
+
+            prompt = self._create_agent_tools_prompt(claim, context)
             
             headers = {
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json"
             }
             
-            # Enhanced payload with Live Search capabilities
+            # Enhanced payload with Agent Tools capabilities
             payload = {
                 "model": self.model,
                 "messages": [
                     {
-                        "role": "system", 
-                        "content": "You are a professional fact-checker with real-time access to web, news, and social media data. Use live search to find current, authoritative information and provide evidence-based fact-checking with specific citations."
+                        "role": "system",
+                        "content": "You are a professional fact-checker with real-time access to web and social media data. Use your search tools to find current, authoritative information and provide evidence-based fact-checking with specific citations."
                     },
                     {
-                        "role": "user", 
+                        "role": "user",
                         "content": prompt
                     }
                 ],
-                "search_parameters": self._get_search_parameters(claim),
+                "tools": [
+                    {"type": "web_search"},
+                    {"type": "x_search"}
+                ],
+                "tool_choice": "auto",  # Let AI decide when to use tools
                 "stream": stream,
                 "temperature": 0.1,
                 "max_tokens": 2000
             }
-            
-            logger.info(f"🌐 Live Search sources: Web, X/Twitter, News, RSS")
-            logger.debug(f"Search parameters: {payload['search_parameters']}")
+
+            logger.info(f"🔧 Agent Tools enabled: web_search, x_search")
+            logger.debug(f"Tools config: {payload['tools']}")
             
             import time
             start_time = time.time()
@@ -1027,8 +1031,8 @@ class GrokFactChecker:
             ) as response:
                 
                 search_time = time.time() - start_time
-                logger.info(f"📡 Grok Live Search Response: {response.status} (took {search_time:.2f}s)")
-                
+                logger.info(f"📡 Grok Agent Tools Response: {response.status} (took {search_time:.2f}s)")
+
                 if response.status == 200:
                     if stream:
                         # Handle streaming response
@@ -1036,46 +1040,47 @@ class GrokFactChecker:
                     else:
                         # Handle non-streaming response
                         data = await response.json()
-                        
-                        # Log live search usage
+
+                        # Log tool usage (new API pricing model)
                         usage = data.get('usage', {})
-                        sources_used = usage.get('num_sources_used', 0)
-                        if sources_used > 0:
-                            cost = sources_used * 0.025  # $0.025 per source
-                            logger.info(f"💰 Live Search: {sources_used} sources used (cost: ${cost:.3f})")
-                        
-                        return self._parse_live_search_response(data, claim)
+                        tool_calls = usage.get('tool_calls', 0)
+                        if tool_calls > 0:
+                            # New pricing: $2.50-$5 per 1,000 tool calls
+                            cost_per_1k = 5.0  # Conservative estimate
+                            cost = (tool_calls / 1000) * cost_per_1k
+                            logger.info(f"💰 Agent Tools: {tool_calls} tool calls (est. cost: ${cost:.4f})")
+
+                        return self._parse_agent_tools_response(data, claim)
                 else:
                     error_text = await response.text()
-                    logger.error(f"❌ Grok Live Search API error {response.status}: {error_text}")
+                    logger.error(f"❌ Grok Agent Tools API error {response.status}: {error_text}")
                     return self._create_fallback_result(claim)
-                    
+
         except Exception as e:
-            logger.error(f"❌ Grok Live Search failed: {e}")
+            logger.error(f"❌ Grok Agent Tools failed: {e}")
             return self._create_fallback_result(claim)
     
-    def _create_live_search_prompt(self, claim: str, context: Optional[str] = None) -> str:
-        """Create optimized prompt for xAI Live Search"""
+    def _create_agent_tools_prompt(self, claim: str, context: Optional[str] = None) -> str:
+        """Create optimized prompt for xAI Agent Tools (web_search + x_search)"""
         from datetime import datetime, timedelta
         
         # Get current date for recent search filtering
         current_date = datetime.now().strftime('%Y-%m-%d')
         recent_date = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
         
-        prompt = f"""Fact-check this claim using real-time live search: "{claim}"
+        prompt = f"""Fact-check this claim using your search tools (web_search and x_search): "{claim}"
 {f"Context: {context}" if context else ""}
 
 IMPORTANT: Respond ONLY with valid JSON. No additional text, no explanations, no markdown - just the JSON object.
 
-LIVE SEARCH STRATEGY:
-1. Search recent news for current developments and expert statements
-2. Check authoritative sources: Reuters, AP News, BBC, CNN, NPR
-3. Look for official statements from government agencies and institutions  
-4. Search X/Twitter for real-time reactions from experts and verified accounts
-5. Find fact-checking websites: Snopes, PolitiFact, FactCheck.org
-6. Cross-reference multiple sources for consensus
+SEARCH STRATEGY:
+1. Use web_search to find recent news, expert statements, and authoritative sources
+2. Check sources: Reuters, AP News, BBC, CNN, NPR, fact-checkers
+3. Look for official statements from government agencies and institutions
+4. Use x_search for real-time X/Twitter reactions from experts and verified accounts
+5. Cross-reference multiple sources for consensus
 
-SEARCH QUERIES TO PERFORM:
+SUGGESTED SEARCH QUERIES:
 - "{claim}" fact check recent news
 - "{claim}" expert statement official
 - "{claim}" Reuters OR "AP News" OR BBC
@@ -1086,7 +1091,7 @@ REQUIRED OUTPUT FORMAT (JSON):
 {{
     "verdict": "True|False|Misleading|Unverifiable",
     "confidence": 0.85,
-    "explanation": "Comprehensive analysis based on live search results",
+    "explanation": "Comprehensive analysis based on search results",
     "web_sources": [
         {{
             "source_name": "Publication Name",
@@ -1112,40 +1117,24 @@ REQUIRED OUTPUT FORMAT (JSON):
     "expert_opinions": "Statements from subject matter experts",
     "official_responses": "Government or institutional responses",
     "misinformation_patterns": "Related false claims being spread",
-    "live_search_queries": ["query 1", "query 2", "query 3"],
+    "searches_performed": ["query 1", "query 2", "query 3"],
     "fact_check_date": "{current_date}",
     "search_timeframe": "Past 7 days to current"
 }}
 
 CRITICAL REQUIREMENTS:
-- Use live search to find CURRENT information from the past week
+- Use your search tools to find CURRENT information from the past week
 - MUST provide complete URLs for every web source
 - Include specific quotes and dates from sources
 - Check both mainstream news and social media for comprehensive coverage
 - Look for consensus across multiple authoritative sources
-- Be transparent about what live search found or couldn't find
+- Be transparent about what your searches found or couldn't find
 - Focus on factual claims, distinguish from opinions
 - Note if information is rapidly evolving or breaking news"""
         return prompt
-    
-    def _get_search_parameters(self, claim: str) -> Dict:
-        """Configure comprehensive live search parameters"""
-        from datetime import datetime, timedelta
-        
-        # Set date range for recent information (past 7 days)
-        to_date = datetime.now().strftime('%Y-%m-%d')
-        from_date = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
-        
-        search_config = {
-            "mode": "on",
-            "return_citations": True,
-            "max_search_results": 5,  # Increased for comprehensive coverage
-        }
-        
-        return search_config
-    
-    def _parse_live_search_response(self, data: Dict, claim: str) -> FactCheckResult:
-        """Parse xAI Live Search response into FactCheckResult"""
+
+    def _parse_agent_tools_response(self, data: Dict, claim: str) -> FactCheckResult:
+        """Parse xAI Agent Tools response into FactCheckResult"""
         try:
             content = data.get('choices', [{}])[0].get('message', {}).get('content', '{}')
             citations = data.get('citations', [])
@@ -1161,28 +1150,28 @@ CRITICAL REQUIREMENTS:
             # Clean up
             json_str = json_str.replace('```json', '').replace('```', '').strip()
             
-            logger.debug(f"Grok Live Search content: {json_str[:500]}...")
-            logger.info(f"Live Search citations found: {len(citations)}")
-        
-            
+            logger.debug(f"Grok Agent Tools content: {json_str[:500]}...")
+            logger.info(f"Agent Tools citations found: {len(citations)}")
+
+
             try:
                 parsed = json.loads(json_str)
             except json.JSONDecodeError as e:
-                logger.warning(f"Failed to parse JSON from Grok Live Search: {e}")
+                logger.warning(f"Failed to parse JSON from Grok Agent Tools: {e}")
                 # Fallback to text analysis
                 return self._extract_from_text_response(content, claim, citations)
-            
-            # Extract web sources with URLs from live search results
+
+            # Extract web sources with URLs from agent tools search results
             web_sources = []
-            live_search_sources = parsed.get("web_sources", [])
-            
-            for source in live_search_sources:
+            agent_search_sources = parsed.get("web_sources", [])
+
+            for source in agent_search_sources:
                 # Ensure source is a dictionary before calling .get()
                 if isinstance(source, dict):
                     source_obj = {
                         "name": source.get("source_name", "Unknown Source"),
                         "url": source.get("source_url", ""),
-                        "type": "live_search_web",
+                        "type": "agent_tools_web",
                         "title": source.get("article_title", ""),
                         "date": source.get("date", ""),
                         "credibility": source.get("credibility", "Medium"),
@@ -1192,15 +1181,15 @@ CRITICAL REQUIREMENTS:
                     web_sources.append(source_obj)
                 else:
                     logger.warning(f"Invalid source type in web_sources: {type(source)} - {source}")
-            
+
             # Add citations from xAI API
             for citation in citations[:5]:  # Limit to top 5 citations
                 # Ensure citation is a dictionary before calling .get()
                 if isinstance(citation, dict):
                     citation_obj = {
-                        "name": citation.get("title", "Live Search Result"),
+                        "name": citation.get("title", "Agent Tools Result"),
                         "url": citation.get("url", ""),
-                        "type": "live_search_citation",
+                        "type": "agent_tools_citation",
                         "title": citation.get("title", ""),
                         "snippet": citation.get("snippet", "")
                     }
@@ -1217,22 +1206,22 @@ CRITICAL REQUIREMENTS:
             
             # Compile comprehensive explanation
             explanation_parts = [
-                parsed.get("explanation", "Analysis completed using live search"),
+                parsed.get("explanation", "Analysis completed using agent tools search"),
                 f"\nNews Coverage: {parsed.get('news_coverage', 'Limited coverage found')}",
                 f"\nExpert Opinions: {parsed.get('expert_opinions', 'No expert statements located')}",
                 f"\nOfficial Responses: {parsed.get('official_responses', 'No official statements found')}"
             ]
-            
+
             if parsed.get('misinformation_patterns'):
                 explanation_parts.append(f"\nMisinformation Patterns: {parsed.get('misinformation_patterns')}")
-            
+
             return FactCheckResult(
                 claim=claim,
                 verdict=parsed.get("verdict", "Unverifiable"),
                 confidence=float(parsed.get("confidence", 0.5)),
                 explanation="\n".join(explanation_parts),
                 sources=web_sources[:8],  # Limit to top 8 sources
-                provider="Grok Live Search (X.AI)",
+                provider="Grok Agent Tools (X.AI)",
                 timestamp=datetime.now(),
                 rating_details={
                     "social_context": social_summary,
@@ -1241,12 +1230,12 @@ CRITICAL REQUIREMENTS:
                     "official_responses": parsed.get("official_responses", ""),
                     "misinformation_patterns": parsed.get("misinformation_patterns", ""),
                     "search_timeframe": parsed.get("search_timeframe", "Recent"),
-                    "live_search_queries": parsed.get("live_search_queries", [])
+                    "searches_performed": parsed.get("searches_performed", [])
                 }
             )
-            
+
         except Exception as e:
-            logger.error(f"Error parsing Grok Live Search response: {e}")
+            logger.error(f"Error parsing Grok Agent Tools response: {e}")
             return self._create_fallback_result(claim)
     
     def _extract_from_text_response(self, content: str, claim: str, citations: List[Dict]) -> FactCheckResult:
@@ -1273,34 +1262,34 @@ CRITICAL REQUIREMENTS:
             for citation in citations[:5]:
                 if isinstance(citation, dict):
                     sources.append({
-                        "name": citation.get("title", "Live Search Result") if isinstance(citation.get("title"), str) else "Live Search Result",
+                        "name": citation.get("title", "Agent Tools Result") if isinstance(citation.get("title"), str) else "Agent Tools Result",
                         "url": citation.get("url", "") if isinstance(citation.get("url"), str) else "",
-                        "type": "live_search_citation",
+                        "type": "agent_tools_citation",
                         "title": citation.get("title", "") if isinstance(citation.get("title"), str) else "",
                         "snippet": citation.get("snippet", "") if isinstance(citation.get("snippet"), str) else ""
                     })
                 else:
                     logger.warning(f"Invalid citation type: {type(citation)}")
-            
+
             # Fallback sources if no citations
             if not sources:
                 import re
                 urls = re.findall(r'https?://[^\s]+', content)
                 for i, url in enumerate(urls[:3]):
                     sources.append({
-                        "name": f"Live Search Source {i+1}",
+                        "name": f"Agent Tools Source {i+1}",
                         "url": url.rstrip('.,;'),
-                        "type": "live_search_url",
+                        "type": "agent_tools_url",
                         "title": ""
                     })
-            
+
             return FactCheckResult(
                 claim=claim,
                 verdict=verdict,
                 confidence=confidence,
                 explanation=content[:800] + "..." if len(content) > 800 else content,
                 sources=sources,
-                provider="Grok Live Search (Text)",
+                provider="Grok Agent Tools (Text)",
                 timestamp=datetime.now()
             )
             
@@ -1309,17 +1298,17 @@ CRITICAL REQUIREMENTS:
             return self._create_fallback_result(claim)
     
     async def _handle_streaming_response(self, response, claim: str, start_time: float) -> FactCheckResult:
-        """Handle streaming Server-Sent Events from xAI Live Search API"""
+        """Handle streaming Server-Sent Events from xAI Agent Tools API"""
         try:
             import json
             import time
-            
-            logger.info("🔄 Processing streaming live search response...")
-            
+
+            logger.info("🔄 Processing streaming agent tools response...")
+
             full_content = ""
             citations_found = []
-            live_searches_started = 0
-            live_searches_completed = 0
+            tool_calls_started = 0
+            tool_calls_completed = 0
             
             async for line in response.content:
                 if not line:
@@ -1337,50 +1326,51 @@ CRITICAL REQUIREMENTS:
                     event_data = json.loads(data_str)
                     event_type = event_data.get('type', '')
                     
-                    # Log live search events
-                    if event_type == 'live_search.started':
-                        live_searches_started += 1
-                        search_query = event_data.get('query', 'Unknown query')
-                        logger.info(f"🔍 Live search {live_searches_started} started: {search_query[:50]}...")
-                    elif event_type == 'live_search.completed':
-                        live_searches_completed += 1
-                        sources_found = event_data.get('sources_found', 0)
-                        logger.info(f"✅ Live search {live_searches_completed} completed: {sources_found} sources found")
-                    
+                    # Log tool call events (updated for Agent Tools API)
+                    if event_type in ['tool_call.started', 'live_search.started']:
+                        tool_calls_started += 1
+                        search_query = event_data.get('query', event_data.get('tool_name', 'Unknown query'))
+                        logger.info(f"🔧 Tool call {tool_calls_started} started: {search_query[:50]}...")
+                    elif event_type in ['tool_call.completed', 'live_search.completed']:
+                        tool_calls_completed += 1
+                        sources_found = event_data.get('sources_found', event_data.get('results', 0))
+                        logger.info(f"✅ Tool call {tool_calls_completed} completed: {sources_found} sources found")
+
                     # Collect text content
                     elif event_type == 'content.delta':
                         delta = event_data.get('delta', '')
                         if delta:
                             full_content += delta
-                    
+
                     # Collect citations
                     elif event_type == 'citation.found':
                         citation = event_data.get('citation', {})
                         if citation:
                             citations_found.append(citation)
                             logger.debug(f"📎 Citation found: {citation.get('title', 'Unknown')}")
-                    
+
                     # Log when response is complete
                     elif event_type == 'response.completed':
                         total_time = time.time() - start_time
-                        logger.info(f"🎉 Streaming live search completed in {total_time:.2f}s")
+                        logger.info(f"🎉 Streaming agent tools completed in {total_time:.2f}s")
                         usage = event_data.get('usage', {})
-                        sources_used = usage.get('num_sources_used', 0)
-                        if sources_used > 0:
-                            cost = sources_used * 0.025
-                            logger.info(f"💰 Live search cost: {sources_used} sources = ${cost:.3f}")
+                        tool_calls_count = usage.get('tool_calls', 0)
+                        if tool_calls_count > 0:
+                            cost_per_1k = 5.0
+                            cost = (tool_calls_count / 1000) * cost_per_1k
+                            logger.info(f"💰 Agent Tools cost: {tool_calls_count} tool calls = ${cost:.4f}")
                         
                 except json.JSONDecodeError:
                     continue  # Skip malformed JSON
             
-            logger.info(f"🌐 Completed {live_searches_completed} live searches with {len(citations_found)} citations")
+            logger.info(f"🔧 Completed {tool_calls_completed} tool calls with {len(citations_found)} citations")
             logger.debug(f"Full streaming content: {full_content[:500]}...")
-            
+
             # Parse the final content with citations
             if not full_content:
-                logger.error("No content received from streaming live search")
+                logger.error("No content received from streaming agent tools")
                 return self._create_fallback_result(claim)
-            
+
             # Create a mock response data structure for parsing
             mock_data = {
                 'choices': [{
@@ -1390,13 +1380,13 @@ CRITICAL REQUIREMENTS:
                 }],
                 'citations': citations_found
             }
-            
-            result = self._parse_live_search_response(mock_data, claim)
-            logger.info(f"✅ Streaming live search analysis complete: {result.verdict} (confidence: {result.confidence:.2f})")
+
+            result = self._parse_agent_tools_response(mock_data, claim)
+            logger.info(f"✅ Streaming agent tools analysis complete: {result.verdict} (confidence: {result.confidence:.2f})")
             return result
-            
+
         except Exception as e:
-            logger.error(f"Error handling streaming live search response: {e}")
+            logger.error(f"Error handling streaming agent tools response: {e}")
             return self._create_fallback_result(claim)
     
     def _parse_grok_response(self, data: Dict, claim: str) -> FactCheckResult:
