@@ -88,43 +88,43 @@ class TrendingClaimsScheduler:
     
     def _setup_jobs(self):
         """Setup all scheduled jobs"""
-        
-        # Job 1: Quick news check every 4 hours (optimized for cost efficiency)
+
+        # Job 1: Quick news check daily at 6 AM UTC (reduced API usage)
         self.scheduler.add_job(
             func=self._quick_news_aggregation,
-            trigger=IntervalTrigger(hours=4),
+            trigger=CronTrigger(hour=6, minute=0),
             id='quick_news_check',
-            name='Quick News Aggregation',
+            name='Quick News Aggregation (Daily)',
             replace_existing=True
         )
         
         # Note: Startup aggregation now runs directly in main.py startup, not as a scheduled job
-        
-        # Job 2: Full news aggregation every 5 hours (reduced frequency)
+
+        # Job 2: Full news aggregation daily at 2 PM UTC (reduced API usage)
         self.scheduler.add_job(
             func=self._full_news_aggregation,
-            trigger=IntervalTrigger(hours=5),
+            trigger=CronTrigger(hour=14, minute=0),
             id='full_news_aggregation',
-            name='Full News Aggregation',
+            name='Full News Aggregation (Daily)',
             replace_existing=True
         )
         
-        # Job 3: Social media trending check every 4 hours (cost optimized)
+        # Job 3: Social media trending check daily at 10 AM UTC (reduced API usage)
         if is_api_available("grok") or is_api_available("reddit_client_id"):
             self.scheduler.add_job(
                 func=self._social_media_check,
-                trigger=IntervalTrigger(hours=4),
+                trigger=CronTrigger(hour=10, minute=0),
                 id='social_media_check',
-                name='Social Media Trending Check',
+                name='Social Media Trending Check (Daily)',
                 replace_existing=True
             )
         
-        # Job 4: Professional fact-check pending claims every 4 hours (reduced API usage)
+        # Job 4: Professional fact-check pending claims daily at 6 PM UTC (reduced API usage)
         self.scheduler.add_job(
             func=self._professional_fact_check_new_claims,
-            trigger=IntervalTrigger(hours=4),
+            trigger=CronTrigger(hour=18, minute=0),
             id='fact_check_pending',
-            name='Fact-Check Pending Claims',
+            name='Fact-Check Pending Claims (Daily)',
             replace_existing=True
         )
         
