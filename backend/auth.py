@@ -4,6 +4,7 @@ Provides HTTP Basic Authentication for sensitive endpoints
 """
 
 import secrets
+from typing import Optional
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from config import get_settings
@@ -48,6 +49,36 @@ def verify_credentials(credentials: HTTPBasicCredentials = Depends(security)):
         )
     
     return True
+
+optional_security = HTTPBasic(auto_error=False)
+
+def optional_verify_credentials(
+    credentials: Optional[HTTPBasicCredentials] = Depends(optional_security)
+) -> Optional[bool]:
+    """
+    Returns True  — valid credentials (admin, unlimited)
+    Returns None  — no Authorization header (anonymous, quota applies)
+    Raises  401   — credentials provided but wrong
+    """
+    if credentials is None:
+        return None
+
+    settings = get_settings()
+    is_correct_username = secrets.compare_digest(
+        credentials.username.encode("utf8"), settings.api_username.encode("utf8")
+    )
+    is_correct_password = secrets.compare_digest(
+        credentials.password.encode("utf8"), settings.api_password.encode("utf8")
+    )
+
+    if not (is_correct_username and is_correct_password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication credentials",
+            headers={"WWW-Authenticate": "Basic"},
+        )
+    return True
+
 
 def get_current_user(credentials: HTTPBasicCredentials = Depends(security)):
     """

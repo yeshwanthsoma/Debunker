@@ -2,7 +2,7 @@
 Database configuration and models for trending claims feature
 """
 
-from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Text, Boolean, ForeignKey, JSON
+from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Text, Boolean, ForeignKey, JSON, UniqueConstraint
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session, relationship
 from datetime import datetime
@@ -27,6 +27,20 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 # Base class for models
 Base = declarative_base()
+
+class DailyUsage(Base):
+    """Tracks anonymous fact-check usage per IP per calendar day"""
+    __tablename__ = "daily_usage"
+
+    id = Column(Integer, primary_key=True, index=True)
+    ip_address = Column(String(45), nullable=False, index=True)   # 45 chars covers IPv6
+    date = Column(String(10), nullable=False, index=True)         # YYYY-MM-DD UTC
+    count = Column(Integer, default=0, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint('ip_address', 'date', name='uq_daily_usage_ip_date'),
+    )
+
 
 class TrendingClaim(Base):
     """Model for trending claims discovered from news/social media"""

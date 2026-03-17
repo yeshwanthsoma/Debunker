@@ -37,7 +37,7 @@ import requests
 from contextlib import asynccontextmanager
 from config import get_settings, is_api_available, get_api_key
 from fact_check_apis import MultiSourceFactChecker
-from auth import verify_credentials, get_current_user
+from auth import verify_credentials, get_current_user, optional_verify_credentials
 from models import (
     AnalysisResponse, ProsodyAnalysis, SourceInfo,
     EvidenceAssessment, DebateContent, CredibilityMetrics, ExpertOpinion,
@@ -45,7 +45,7 @@ from models import (
     TrendingClaimResponse, TrendingClaimsListResponse, TrendingClaimDetailResponse,
     AggregationTriggerResponse, CategoryStatsResponse
 )
-from database import get_db, TrendingClaim, ClaimSource, ClaimAnalytics, init_db
+from database import get_db, TrendingClaim, ClaimSource, ClaimAnalytics, init_db, DailyUsage
 from news_aggregator import NewsAggregator, save_claims_to_database
 from grok_integration import GrokSocialAnalyzer, enhance_trending_claim_with_grok
 from scheduler import start_background_scheduler, stop_background_scheduler, get_scheduler
@@ -604,20 +604,40 @@ async def health_check():
         "timestamp": time.time()
     }
 
+DAILY_ANON_LIMIT = 3
+
 @app.post("/api/analyze", response_model=AnalysisResponse)
 @limiter.limit("30/minute")
 async def analyze_claim(
-    request: Request, 
+    request: Request,
     analysis_request: AnalysisRequest,
-    authenticated: bool = Depends(verify_credentials)
+    authenticated: Optional[bool] = Depends(optional_verify_credentials),
+    db: Session = Depends(get_db),
 ):
-    """Analyze a claim for fact-checking (requires authentication)"""
+    """Analyze a claim. Anonymous users limited to 3 checks/day; admin is unlimited."""
     global request_counter
     request_counter += 1
     request_id = f"REQ-{request_counter:04d}"
-    
+
     if not fact_checker:
         raise HTTPException(status_code=503, detail="Fact checker not initialized")
+
+    if authenticated is None:
+        ip = get_remote_address(request)
+        today = datetime.utcnow().strftime("%Y-%m-%d")
+        usage = db.query(DailyUsage).filter(
+            DailyUsage.ip_address == ip, DailyUsage.date == today
+        ).first()
+        if usage is None:
+            usage = DailyUsage(ip_address=ip, date=today, count=0)
+            db.add(usage)
+        if usage.count >= DAILY_ANON_LIMIT:
+            raise HTTPException(
+                status_code=429,
+                detail="This is a beta app! You've used your 3 free checks for today. Come back tomorrow!"
+            )
+        usage.count += 1
+        db.commit()
     
     logger.info("=" * 80)
     logger.info(f"🎯 NEW FACT-CHECK REQUEST [{request_id}]")
@@ -994,12 +1014,30 @@ async def analyze_claim_with_file(
     request: Request,
     audio_file: UploadFile = File(..., description="Audio file to analyze"),
     text_claim: str = Form("", description="Optional text claim to fact-check"),
-    authenticated: bool = Depends(verify_credentials),
+    authenticated: Optional[bool] = Depends(optional_verify_credentials),
+    db: Session = Depends(get_db),
     enable_prosody: bool = Form(True, description="Enable prosody analysis")
 ):
-    """Analyze a claim with file upload support (requires authentication)"""
+    """Analyze a claim with file upload support. Anonymous users limited to 3 checks/day."""
     if not fact_checker:
         raise HTTPException(status_code=503, detail="Fact checker not initialized")
+
+    if authenticated is None:
+        ip = get_remote_address(request)
+        today = datetime.utcnow().strftime("%Y-%m-%d")
+        usage = db.query(DailyUsage).filter(
+            DailyUsage.ip_address == ip, DailyUsage.date == today
+        ).first()
+        if usage is None:
+            usage = DailyUsage(ip_address=ip, date=today, count=0)
+            db.add(usage)
+        if usage.count >= DAILY_ANON_LIMIT:
+            raise HTTPException(
+                status_code=429,
+                detail="This is a beta app! You've used your 3 free checks for today. Come back tomorrow!"
+            )
+        usage.count += 1
+        db.commit()
     
     logger.info(f"📝 Received file analysis request")
     
