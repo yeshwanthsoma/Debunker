@@ -1582,6 +1582,21 @@ class MultiSourceFactChecker:
         
         logger.info(f"   Available APIs: {', '.join(available_apis) if available_apis else 'None'}")
 
+        # Classify input before spending API budget
+        classification = await self._classify_input(claim)
+        input_type = classification.get("type", "factual_claim")
+
+        if input_type in ("pure_opinion", "off_topic"):
+            logger.info(f"⏭️ Skipping fact-check — input is {input_type}")
+            return self._non_claim_result(input_type, classification.get("explanation", ""))
+
+        # For rhetorical questions, check the implied claim instead
+        if input_type == "rhetorical_question":
+            extracted = classification.get("extracted_claim")
+            if extracted and extracted != claim:
+                logger.info(f"❓ Rhetorical question → checking implied claim: '{extracted[:80]}'")
+                claim = extracted
+
         results = []
 
         # Run fact-checks in parallel — Google handles its own claim extraction internally.
@@ -1655,6 +1670,76 @@ class MultiSourceFactChecker:
     async def _wrap_grok_result(self, grok_task) -> FactCheckResult:
         """Wrapper to handle Grok task in gather"""
         return await grok_task
+
+    async def _classify_input(self, claim: str) -> Dict[str, Any]:
+        """Classify input type using gpt-4o-mini and extract the core checkable claim."""
+        if not is_api_available("openai"):
+            return {"type": "factual_claim", "extracted_claim": claim, "explanation": ""}
+
+        prompt = f"""Classify this input and extract the core checkable claim if one exists.
+
+Input: "{claim}"
+
+Respond with JSON only:
+{{
+  "type": "factual_claim" | "rhetorical_question" | "pure_opinion" | "off_topic",
+  "extracted_claim": "the core factual claim to check, or null if none",
+  "explanation": "one sentence explaining why, if not a factual_claim"
+}}
+
+Rules:
+- factual_claim: a statement presented as fact (even if false), checkable against evidence
+- rhetorical_question: question implying a factual claim ("Did you know vaccines cause autism?")
+- pure_opinion: personal preference/value judgement with no checkable facts ("I think X is bad")
+- off_topic: no factual claim exists (greetings, requests, preamble, filler text)
+- Opinion stated as fact ("Vaccines are dangerous") → factual_claim, NOT pure_opinion
+- When in doubt, classify as factual_claim"""
+
+        try:
+            session = await self.openai_checker._get_session()
+            payload = {
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": 150,
+                "temperature": 0.1,
+                "response_format": {"type": "json_object"}
+            }
+            async with session.post("https://api.openai.com/v1/chat/completions", json=payload) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    result = json.loads(data["choices"][0]["message"]["content"])
+                    logger.info(f"🏷️ Input type: {result.get('type')} | claim: '{str(result.get('extracted_claim',''))[:60]}'")
+                    return result
+        except Exception as e:
+            logger.warning(f"Input classification failed, proceeding as factual_claim: {e}")
+
+        return {"type": "factual_claim", "extracted_claim": claim, "explanation": ""}
+
+    def _non_claim_result(self, input_type: str, explanation: str) -> Dict[str, Any]:
+        """Structured result for inputs that are not fact-checkable."""
+        if input_type == "pure_opinion":
+            verdict = "Opinion"
+            msg = explanation or "This is a personal opinion rather than a verifiable factual claim. Opinions reflect personal values and cannot be fact-checked."
+        else:
+            verdict = "Not a Claim"
+            msg = explanation or "No verifiable factual claim was detected in this input."
+
+        return {
+            "verdict": verdict,
+            "confidence": 1.0,
+            "explanation": msg,
+            "sources": [],
+            "provider": "Input Classifier",
+            "details": {
+                "source_count": 0,
+                "source_agreement": "single",
+                "source_verdicts": {},
+                "primary_claims_extracted": [],
+                "claim_evaluations": {},
+                "web_sources_consulted": [],
+                "reasoning": f"Input classified as {input_type} — no fact-checking performed."
+            }
+        }
 
     async def _decompose_claim(self, claim: str) -> List[str]:
         """Decompose compound claim into atomic sub-claims using GoogleFactCheckAPI's LLM extractor."""
