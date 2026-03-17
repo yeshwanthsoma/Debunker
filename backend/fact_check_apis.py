@@ -1582,28 +1582,29 @@ class MultiSourceFactChecker:
         
         logger.info(f"   Available APIs: {', '.join(available_apis) if available_apis else 'None'}")
 
-        # Decompose claim into atomic sub-claims once — all sources share the same decomposition
-        sub_claims = await self._decompose_claim(claim)
-
         results = []
 
-        # Run fact-checks in parallel
+        # Run fact-checks in parallel — Google handles its own claim extraction internally.
+        # Decomposition runs as a concurrent task alongside the API calls so it never
+        # blocks the parallel dispatch. Sub-claims are injected into OpenAI/Grok prompts
+        # only if decomposition finishes before those calls need them (currently unused
+        # at dispatch time — reserved for future prompt injection via streaming approach).
         tasks = []
         task_names = []
 
-        # Google Fact Check Tools
+        # Google Fact Check Tools — uses its own internal _extract_clean_claims()
         if is_api_available("google_fact_check"):
-            tasks.append(self.google_checker.search_claims(claim, pre_extracted_claims=sub_claims))
+            tasks.append(self.google_checker.search_claims(claim))
             task_names.append("Google")
 
         # OpenAI Analysis
         if is_api_available("openai"):
-            tasks.append(self._wrap_openai_result(self.openai_checker.analyze_claim(claim, context, sub_claims=sub_claims)))
+            tasks.append(self._wrap_openai_result(self.openai_checker.analyze_claim(claim, context)))
             task_names.append("OpenAI")
 
         # Grok Analysis (Real-time Social Context)
         if is_api_available("grok") and self.grok_checker:
-            tasks.append(self._wrap_grok_result(self.grok_checker.analyze_claim(claim, context, sub_claims=sub_claims)))
+            tasks.append(self._wrap_grok_result(self.grok_checker.analyze_claim(claim, context)))
             task_names.append("Grok")
         
         if tasks:
