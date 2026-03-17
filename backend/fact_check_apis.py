@@ -618,7 +618,7 @@ URL EXAMPLES:
                 web_sources = []
                 for evidence in evidence_found:
                     source_name = evidence.get("source_name", evidence.get("source", "Unknown Source"))
-                    source_url = evidence.get("source_url", "")
+                    source_url = evidence.get("source_url", "").strip().strip('"\'')
                     article_title = evidence.get("article_title", "")
                     
                     # Create source object with proper URL
@@ -1268,7 +1268,7 @@ CRITICAL REQUIREMENTS:
                 if isinstance(source, dict):
                     source_obj = {
                         "name": source.get("source_name", "Unknown Source"),
-                        "url": source.get("source_url", ""),
+                        "url": source.get("source_url", "").strip().strip('"\''),
                         "type": "agent_tools_web",
                         "title": source.get("article_title", ""),
                         "date": source.get("date", ""),
