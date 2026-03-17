@@ -14,6 +14,16 @@ from config import get_api_key, is_api_available
 # Configure logging
 logger = logging.getLogger(__name__)
 
+def _clean_url(url: str) -> str:
+    """Strip trailing quotes (literal and URL-encoded) and punctuation from URLs."""
+    url = url.strip()
+    # Remove URL-encoded quotes (%22 = ", %27 = ')
+    while url.endswith('%22') or url.endswith('%27'):
+        url = url[:-3]
+    # Remove literal quotes and trailing punctuation
+    url = url.strip('"\'').rstrip('.,;')
+    return url
+
 @dataclass
 class FactCheckResult:
     """Standardized fact-check result"""
@@ -618,9 +628,9 @@ URL EXAMPLES:
                 web_sources = []
                 for evidence in evidence_found:
                     source_name = evidence.get("source_name", evidence.get("source", "Unknown Source"))
-                    source_url = evidence.get("source_url", "").strip().strip('"\'')
+                    source_url = _clean_url(evidence.get("source_url", ""))
                     article_title = evidence.get("article_title", "")
-                    
+
                     # Create source object with proper URL
                     if source_url and source_url.startswith("http"):
                         source_obj = {
@@ -715,7 +725,7 @@ URL EXAMPLES:
                 for i, url in enumerate(urls[:3]):
                     sources.append({
                         "name": f"Source {i+1}",
-                        "url": url.rstrip('.,;'),  # Remove trailing punctuation
+                        "url": _clean_url(url),
                         "type": "web_search",
                         "title": ""
                     })
@@ -1268,7 +1278,7 @@ CRITICAL REQUIREMENTS:
                 if isinstance(source, dict):
                     source_obj = {
                         "name": source.get("source_name", "Unknown Source"),
-                        "url": source.get("source_url", "").strip().strip('"\''),
+                        "url": _clean_url(source.get("source_url", "")),
                         "type": "agent_tools_web",
                         "title": source.get("article_title", ""),
                         "date": source.get("date", ""),
@@ -1376,7 +1386,7 @@ CRITICAL REQUIREMENTS:
                 for i, url in enumerate(urls[:3]):
                     sources.append({
                         "name": f"Agent Tools Source {i+1}",
-                        "url": url.rstrip('.,;'),
+                        "url": _clean_url(url),
                         "type": "agent_tools_url",
                         "title": ""
                     })
