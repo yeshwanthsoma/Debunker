@@ -119,27 +119,37 @@ Respond with JSON array: ["claim1", "claim2"]"""
         if self.session:
             await self.session.close()
     
-    async def search_claims(self, query: str, language_code: str = "en", max_age_days: int = 365) -> List[FactCheckResult]:
+    async def search_claims(
+        self,
+        query: str,
+        language_code: str = "en",
+        max_age_days: int = 365,
+        pre_extracted_claims: Optional[List[str]] = None
+    ) -> List[FactCheckResult]:
         """Search for fact-checked claims using Google Fact Check Tools API with claim extraction"""
         if not is_api_available("google_fact_check"):
             logger.warning("🔑 Google Fact Check API key not available")
             return []
-        
+
         logger.info(f"🌐 CALLING Google Fact Check Tools API")
         logger.info(f"   Original Query: '{query[:100]}{'...' if len(query) > 100 else ''}'")
-        
-        # Extract clean claims from conversational text
-        clean_claims = await self._extract_clean_claims(query)
-        
+
+        # Use pre-extracted sub-claims if provided, otherwise extract them now
+        if pre_extracted_claims is not None:
+            clean_claims = pre_extracted_claims
+            logger.info(f"Using {len(clean_claims)} pre-extracted sub-claims")
+        else:
+            clean_claims = await self._extract_clean_claims(query)
+
         all_results = []
-        
+
         # Search for each extracted claim
         try:
             session = await self._get_session()
-            
+
             for claim in clean_claims:
                 logger.info(f"🔍 Searching Google for: '{claim}'")
-                
+
                 params = {
                     "key": self.api_key,
                     "query": claim,
@@ -147,28 +157,50 @@ Respond with JSON array: ["claim1", "claim2"]"""
                     "maxAgeDays": max_age_days,
                     "pageSize": 10
                 }
-                
+
                 import time
                 start_time = time.time()
-                
+
+                results_for_this_claim = []
+
                 async with session.get(self.base_url, params=params) as response:
                     api_time = time.time() - start_time
-                    
+
                     if response.status == 200:
                         data = await response.json()
                         results = self._parse_google_results(data, claim)
                         if results:
                             logger.info(f"✅ Found {len(results)} Google results for '{claim}' (took {api_time:.2f}s)")
-                            all_results.extend(results)
+                            results_for_this_claim.extend(results)
                         else:
                             logger.debug(f"📡 No Google results for '{claim}' (took {api_time:.2f}s)")
                     else:
                         error_text = await response.text()
                         logger.error(f"❌ Google API error {response.status} for '{claim}': {error_text[:100]}...")
-            
+
+                # Second query: keyword-only variant (if meaningfully different)
+                keyword_query = self._generate_keyword_query(claim)
+                if keyword_query and len(keyword_query) < len(claim) * 0.8 and keyword_query != claim:
+                    params["query"] = keyword_query
+                    async with session.get(self.base_url, params=params) as kw_response:
+                        if kw_response.status == 200:
+                            kw_data = await kw_response.json()
+                            kw_results = self._parse_google_results(kw_data, claim)
+                            if kw_results:
+                                logger.info(f"🔑 Found {len(kw_results)} keyword-variant results for '{keyword_query}'")
+                                results_for_this_claim.extend(kw_results)
+
+                # Deduplicate by (claim_text, publisher_name) before adding to all_results
+                seen = set()
+                for r in results_for_this_claim:
+                    key = (r.claim, r.sources[0].get("name", "") if r.sources else "")
+                    if key not in seen:
+                        seen.add(key)
+                        all_results.append(r)
+
             logger.info(f"📊 Total Google fact-check results: {len(all_results)}")
             return all_results
-                    
+
         except Exception as e:
             logger.error(f"💥 Error calling Google Fact Check API: {e}")
             import traceback
@@ -276,6 +308,19 @@ Respond with JSON array: ["claim1", "claim2"]"""
             return f"According to {review.get('publisher', {}).get('name', 'the fact-checker')}: {title}"
         return "Fact-check result from verified source."
 
+    _STOPWORDS = {
+        "a", "an", "the", "and", "or", "but", "in", "on", "at", "to", "for",
+        "of", "with", "by", "from", "is", "are", "was", "were", "be", "been",
+        "has", "have", "had", "that", "this", "it", "as", "not", "do", "did"
+    }
+
+    def _generate_keyword_query(self, claim: str) -> str:
+        """Strip stopwords and return up to 5 key terms for keyword-based Google search."""
+        tokens = claim.lower().split()
+        keywords = [t.strip('.,!?;:') for t in tokens
+                    if t.strip('.,!?;:') not in self._STOPWORDS and len(t.strip('.,!?;:')) > 2]
+        return " ".join(keywords[:5])
+
 class OpenAIFactChecker:
     """OpenAI-powered fact checking"""
     
@@ -300,21 +345,21 @@ class OpenAIFactChecker:
         if self.session:
             await self.session.close()
     
-    async def analyze_claim(self, claim: str, context: Optional[str] = None, stream: bool = False) -> FactCheckResult:
+    async def analyze_claim(self, claim: str, context: Optional[str] = None, stream: bool = False, sub_claims: Optional[List[str]] = None) -> FactCheckResult:
         """Analyze a claim using OpenAI /v1/responses API with web search"""
         if not is_api_available("openai"):
             logger.warning("🔑 OpenAI API key not available")
             return self._create_fallback_result(claim)
-        
+
         logger.info(f"🤖 CALLING OpenAI /v1/responses API with Web Search")
         logger.info(f"   Claim: '{claim[:100]}{'...' if len(claim) > 100 else ''}'")
         logger.info(f"   Context: {'Yes' if context else 'No'}")
         logger.info(f"   Model: {self.model}")
-        
+
         try:
             session = await self._get_session()
-            
-            prompt = self._create_web_search_prompt(claim, context)
+
+            prompt = self._create_web_search_prompt(claim, context, sub_claims=sub_claims)
             
             payload = {
                 "model": self.model,
@@ -451,12 +496,17 @@ CLAIM: "Vaccines are effective at preventing diseases they target."
 Use your internet access to find the most current and authoritative information available."""
         return prompt
     
-    def _create_web_search_prompt(self, claim: str, context: Optional[str] = None) -> str:
+    def _create_web_search_prompt(self, claim: str, context: Optional[str] = None, sub_claims: Optional[List[str]] = None) -> str:
         """Create an optimized prompt for the /v1/responses API with web search"""
         from datetime import datetime
-        
+
+        sub_claims_section = ""
+        if sub_claims and len(sub_claims) > 1:
+            sub_claims_text = "\n".join(f"- {sc}" for sc in sub_claims)
+            sub_claims_section = f"\n\nATOMIC SUB-CLAIMS TO VERIFY INDIVIDUALLY:\n{sub_claims_text}\n"
+
         prompt = f"""Fact-check this claim using real-time web search: "{claim}"
-{f"Context: {context}" if context else ""}
+{f"Context: {context}" if context else ""}{sub_claims_section}
 
 SEARCH STRATEGY:
 1. Search for recent news and information about this claim
@@ -974,7 +1024,7 @@ class GrokFactChecker:
             await self.session.close()
             self.session = None
     
-    async def analyze_claim(self, claim: str, context: Optional[str] = None, stream: bool = False) -> FactCheckResult:
+    async def analyze_claim(self, claim: str, context: Optional[str] = None, stream: bool = False, sub_claims: Optional[List[str]] = None) -> FactCheckResult:
         """Analyze a claim using xAI Agent Tools API with real-time web and X/Twitter search"""
         if not self.api_key:
             raise ValueError("Grok API key not available")
@@ -987,7 +1037,7 @@ class GrokFactChecker:
         try:
             logger.info(f"🔧 Grok Agent Tools analyzing claim: '{claim[:60]}...'")
 
-            prompt = self._create_agent_tools_prompt(claim, context)
+            prompt = self._create_agent_tools_prompt(claim, context, sub_claims=sub_claims)
             
             headers = {
                 "Authorization": f"Bearer {self.api_key}",
@@ -1062,16 +1112,21 @@ class GrokFactChecker:
             logger.error(f"❌ Grok Agent Tools failed: {e}")
             return self._create_fallback_result(claim)
     
-    def _create_agent_tools_prompt(self, claim: str, context: Optional[str] = None) -> str:
+    def _create_agent_tools_prompt(self, claim: str, context: Optional[str] = None, sub_claims: Optional[List[str]] = None) -> str:
         """Create optimized prompt for xAI Agent Tools (web_search + x_search)"""
         from datetime import datetime, timedelta
-        
+
         # Get current date for recent search filtering
         current_date = datetime.now().strftime('%Y-%m-%d')
         recent_date = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
-        
+
+        sub_claims_section = ""
+        if sub_claims and len(sub_claims) > 1:
+            sub_claims_text = "\n".join(f"- {sc}" for sc in sub_claims)
+            sub_claims_section = f"\n\nATOMIC SUB-CLAIMS TO VERIFY INDIVIDUALLY:\n{sub_claims_text}\n"
+
         prompt = f"""Fact-check this claim using your search tools (web_search and x_search): "{claim}"
-{f"Context: {context}" if context else ""}
+{f"Context: {context}" if context else ""}{sub_claims_section}
 
 IMPORTANT: Respond ONLY with valid JSON. No additional text, no explanations, no markdown - just the JSON object.
 
@@ -1526,26 +1581,29 @@ class MultiSourceFactChecker:
             available_apis.append("Grok")
         
         logger.info(f"   Available APIs: {', '.join(available_apis) if available_apis else 'None'}")
-        
+
+        # Decompose claim into atomic sub-claims once — all sources share the same decomposition
+        sub_claims = await self._decompose_claim(claim)
+
         results = []
-        
+
         # Run fact-checks in parallel
         tasks = []
         task_names = []
-        
+
         # Google Fact Check Tools
         if is_api_available("google_fact_check"):
-            tasks.append(self.google_checker.search_claims(claim))
+            tasks.append(self.google_checker.search_claims(claim, pre_extracted_claims=sub_claims))
             task_names.append("Google")
-        
+
         # OpenAI Analysis
         if is_api_available("openai"):
-            tasks.append(self._wrap_openai_result(self.openai_checker.analyze_claim(claim, context)))
+            tasks.append(self._wrap_openai_result(self.openai_checker.analyze_claim(claim, context, sub_claims=sub_claims)))
             task_names.append("OpenAI")
-        
+
         # Grok Analysis (Real-time Social Context)
         if is_api_available("grok") and self.grok_checker:
-            tasks.append(self._wrap_grok_result(self.grok_checker.analyze_claim(claim, context)))
+            tasks.append(self._wrap_grok_result(self.grok_checker.analyze_claim(claim, context, sub_claims=sub_claims)))
             task_names.append("Grok")
         
         if tasks:
@@ -1596,7 +1654,17 @@ class MultiSourceFactChecker:
     async def _wrap_grok_result(self, grok_task) -> FactCheckResult:
         """Wrapper to handle Grok task in gather"""
         return await grok_task
-    
+
+    async def _decompose_claim(self, claim: str) -> List[str]:
+        """Decompose compound claim into atomic sub-claims using GoogleFactCheckAPI's LLM extractor."""
+        try:
+            sub_claims = await self.google_checker._extract_clean_claims(claim)
+            logger.info(f"Decomposed '{claim[:60]}' into {len(sub_claims)} sub-claims: {sub_claims}")
+            return sub_claims if sub_claims else [claim]
+        except Exception as e:
+            logger.warning(f"Claim decomposition failed, using original claim: {e}")
+            return [claim]
+
     async def _synthesize_results(self, claim: str, results: List[FactCheckResult]) -> Dict[str, Any]:
         """Synthesize multiple fact-check results into a final assessment with improved weighting"""
         if not results:
@@ -1679,6 +1747,31 @@ class MultiSourceFactChecker:
             confidence_weights += google_total_weight
             logger.info(f"   Google: {google_verdict} (weight: {google_total_weight:.2f}, conf: {google_confidence:.2f})")
         
+        # Collect per-source verdicts for agreement analysis
+        source_verdicts = {}
+        if openai_results:
+            source_verdicts["OpenAI"] = openai_results[0].verdict
+        if grok_results:
+            source_verdicts["Grok"] = grok_results[0].verdict
+        if google_results:
+            source_verdicts["Google"] = google_verdict
+
+        # Classify source agreement
+        unique_verdicts = set(source_verdicts.values())
+        DIRECT_CONTRADICTIONS = {frozenset({"True", "False"})}
+
+        if len(source_verdicts) <= 1:
+            source_agreement = "single"
+        elif len(unique_verdicts) == 1:
+            source_agreement = "agree"
+        elif any(frozenset({a, b}) in DIRECT_CONTRADICTIONS
+                 for a in unique_verdicts for b in unique_verdicts if a != b):
+            source_agreement = "conflict"
+        else:
+            source_agreement = "partial"
+
+        logger.info(f"   Source agreement: {source_agreement} | Verdicts: {source_verdicts}")
+
         # Determine final verdict
         if total_weight > 0:
             primary_verdict = max(weighted_scores, key=weighted_scores.get)
@@ -1686,7 +1779,17 @@ class MultiSourceFactChecker:
         else:
             primary_verdict = "Unverifiable"
             final_confidence = 0.1
-        
+
+        # Apply confidence modifier based on source agreement
+        conflict_note = ""
+        if source_agreement == "agree":
+            final_confidence = min(0.95, final_confidence + 0.1)
+        elif source_agreement == "conflict":
+            final_confidence = min(final_confidence, 0.65)
+            conflict_sources = " vs ".join(f"{src}: {vrd}" for src, vrd in source_verdicts.items())
+            conflict_note = f" NOTE: Sources conflict ({conflict_sources})."
+            logger.warning(f"   Confidence capped at {final_confidence:.2f} — {conflict_sources}")
+
         # Add scientific consensus boost for well-established facts
         scientific_consensus_topics = [
             ("vaccine", ["safe", "effective", "work"], "True"),
@@ -1717,14 +1820,16 @@ class MultiSourceFactChecker:
         combined_explanation = await self._create_unified_explanation(
             claim, primary_verdict, openai_results, grok_results, processed_google
         )
-        
+        if conflict_note:
+            combined_explanation += conflict_note
+
         # Collect all sources
         all_sources = []
         for result in results:
             all_sources.extend(result.sources)
-        
+
         logger.info(f"✅ Final synthesis: {primary_verdict} (confidence: {final_confidence:.2f})")
-        
+
         return {
             "verdict": primary_verdict,
             "confidence": min(0.95, max(0.1, final_confidence)),
@@ -1742,7 +1847,9 @@ class MultiSourceFactChecker:
                 "primary_claims_extracted": self._extract_primary_claims(results),
                 "claim_evaluations": self._extract_claim_evaluations(results),
                 "web_sources_consulted": self._extract_web_sources(all_sources),
-                "reasoning": f"Weighted analysis: OpenAI results ({len(openai_results)}) + Grok results ({len(grok_results)}) + Google results ({len(google_results)}) = {primary_verdict}"
+                "source_agreement": source_agreement,
+                "source_verdicts": source_verdicts,
+                "reasoning": f"Weighted analysis [{source_agreement}]: OpenAI ({len(openai_results)}) + Grok ({len(grok_results)}) + Google ({len(google_results)}) = {primary_verdict}{conflict_note}"
             }
         }
     

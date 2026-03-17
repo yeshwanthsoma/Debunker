@@ -79,6 +79,7 @@ class AnalysisResponse(BaseModel):
     credibility_metrics: CredibilityMetrics = Field(default_factory=CredibilityMetrics, description="Credibility assessment")
     debate_content: Optional[DebateContent] = Field(None, description="Debate and discussion content")
     provider: str = Field("", description="Fact-checking provider used")
+    source_agreement: Optional[str] = Field(None, description="Source agreement level: agree | partial | conflict | single")
     processing_time: float = Field(0.0, description="Processing time in seconds")
     timestamp: str = Field("", description="Analysis timestamp")
 

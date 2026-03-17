@@ -917,7 +917,12 @@ async def analyze_claim(
             verdict_val = getattr(fact_check_result, 'verdict', 'Unknown')
             explanation_val = getattr(fact_check_result, 'explanation', 'No explanation available')
             provider_val = getattr(fact_check_result, 'provider', 'Unknown')
-        
+
+        # Extract source_agreement for UI display
+        source_agreement_val = None
+        if details and isinstance(details, dict):
+            source_agreement_val = details.get('source_agreement')
+
         result = AnalysisResponse(
             transcription=transcription,
             claim=claim,
@@ -930,6 +935,7 @@ async def analyze_claim(
             credibility_metrics=credibility_data,
             debate_content=debate_data,
             provider=provider_val,
+            source_agreement=source_agreement_val,
             processing_time=processing_time,
             timestamp=datetime.now().isoformat()
         )
