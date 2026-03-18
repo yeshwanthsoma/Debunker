@@ -1092,7 +1092,7 @@ async def analyze_claim_with_file(
             enable_prosody=enable_prosody
         )
         
-        result = await analyze_claim(request, analysis_request)
+        result = await analyze_claim(request, response, analysis_request, authenticated=True, db=db)
         
         # Clean up temporary file
         if audio_file_path and os.path.exists(audio_file_path):
