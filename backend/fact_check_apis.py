@@ -1830,12 +1830,12 @@ Rules:
             confidence_weights += weight
             logger.info(f"   Grok: {result.verdict} (weight: {weight:.2f}, conf: {result.confidence:.2f})")
         
-        # Weight processed Google results
-        google_weight = 1.0
+        # Weight processed Google results — treated as ONE synthesized verdict, not amplified by result count
+        google_weight = 1.5
         google_verdict = processed_google.get("consensus_verdict", "Unverifiable")
         google_confidence = processed_google.get("confidence", 0.5)
-        google_total_weight = google_weight * google_confidence * processed_google.get("result_count", 1)
-        
+        google_total_weight = google_weight * google_confidence  # NOT multiplied by result_count
+
         if google_results:  # Only if we have Google results
             weighted_scores[google_verdict] += google_total_weight
             total_weight += google_total_weight
@@ -2070,58 +2070,22 @@ Unified Explanation:"""
             }
             fact_check_summaries.append(f"{i+1}. {summary['source']}: '{summary['explanation']}' (Verdict: {summary['verdict']})")
         
-        prompt = f"""You are analyzing fact-check results from Google Fact Check Tools API. Your task is to interpret these results in context to determine what they actually say about the original claim.
+        prompt = f"""Analyze these Google Fact Check API results and determine what they say about the ORIGINAL CLAIM.
 
 ORIGINAL CLAIM: "{claim}"
 
-FACT-CHECK RESULTS FROM GOOGLE:
+GOOGLE FACT-CHECK RESULTS:
 {chr(10).join(fact_check_summaries)}
 
-CRITICAL INTERPRETATION RULES:
-Google Fact Check often contains articles debunking MISINFORMATION about established scientific topics. You must distinguish between:
+CRITICAL: A "False" verdict in a Google result means the CHECKED CLAIM is false — not necessarily the original claim. The Google API often returns fact-checks about the OPPOSITE of the original claim (e.g. someone falsely claiming the subject is not true). Read each explanation carefully to determine whether the fact-checker was checking the original claim or its negation, then interpret the verdict accordingly.
 
-A) DEBUNKING THE CLAIM ITSELF (claim is false)
-B) DEBUNKING MISINFORMATION ABOUT THE CLAIM (claim is actually true)
-
-DETAILED EXAMPLES:
-
-CLAIM: "Vaccines are safe and effective"
-- Google Result: "Fact-check debunks RFK Jr. vaccine claims" → SUPPORTS vaccine safety (debunking misinformation)
-- Google Result: "Study finds vaccines cause autism" → REFUTES vaccine safety (debunking the claim itself)
-
-CLAIM: "Climate change is caused by human activities"  
-- Google Result: "Fact-check: Climate denial study misleading" → SUPPORTS climate science (debunking denial)
-- Google Result: "IPCC report confirms human causation" → SUPPORTS climate science (direct confirmation)
-- Google Result: "Study proves climate change is natural" → REFUTES climate science (debunking the claim)
-
-CLAIM: "The Earth is round"
-- Google Result: "Flat Earth theory debunked by NASA" → SUPPORTS round Earth (debunking misinformation)
-- Google Result: "NASA admits Earth is flat" → REFUTES round Earth (if true, which it's not)
-
-INTERPRETATION LOGIC:
-1. Look for keywords: "debunks", "misleading", "false claims about", "misinformation about"
-2. Identify the TARGET of the debunking - is it debunking the claim or debunking misinformation about the claim?
-3. For scientific consensus topics (vaccines, climate, basic science), assume debunking is about misinformation UNLESS explicitly stated otherwise
-
-SCIENTIFIC CONSENSUS TOPICS (default to True unless clearly refuted):
-- Vaccine safety and effectiveness
-- Climate change and human causation
-- Basic physics (water boiling, gravity, etc.)
-- Earth's shape and astronomy
-- Evolution and biology basics
-
-Your job: Determine if these Google fact-checks are:
-1. SUPPORTING THE CLAIM (by debunking misinformation about it)
-2. REFUTING THE CLAIM (by providing evidence against it)
-3. MIXED/UNCLEAR
-
-Respond with ONLY this JSON:
+Respond with ONLY valid JSON:
 {{
     "interpretation": "supporting_claim|refuting_claim|mixed|unclear",
-    "consensus_verdict": "True|False|Misleading|Unverifiable", 
-    "confidence": 0.75,
-    "reasoning": "Detailed explanation focusing on whether Google results debunk the claim itself or misinformation about the claim",
-    "evidence_summary": "What the fact-checks actually indicate about the original claim with specific focus on scientific consensus"
+    "consensus_verdict": "True|False|Misleading|Unverifiable",
+    "confidence": 0.0,
+    "reasoning": "Brief explanation of what the results actually indicate about the original claim",
+    "evidence_summary": "One sentence summary"
 }}"""
 
         try:
