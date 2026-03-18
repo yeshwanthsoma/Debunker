@@ -29,16 +29,16 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
 class DailyUsage(Base):
-    """Tracks anonymous fact-check usage per IP per calendar day"""
+    """Tracks anonymous fact-check usage per device cookie per calendar day"""
     __tablename__ = "daily_usage"
 
     id = Column(Integer, primary_key=True, index=True)
-    ip_address = Column(String(45), nullable=False, index=True)   # 45 chars covers IPv6
-    date = Column(String(10), nullable=False, index=True)         # YYYY-MM-DD UTC
+    device_id = Column(String(36), nullable=False, index=True)   # UUID from debunker_id cookie
+    date = Column(String(10), nullable=False, index=True)        # YYYY-MM-DD UTC
     count = Column(Integer, default=0, nullable=False)
 
     __table_args__ = (
-        UniqueConstraint('ip_address', 'date', name='uq_daily_usage_ip_date'),
+        UniqueConstraint('device_id', 'date', name='uq_daily_usage_device_date'),
     )
 
 

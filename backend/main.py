@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Depends, Request
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Depends, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -92,11 +92,15 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(SlowAPIMiddleware)
 
-# Configure CORS - Allow all origins for now
+# Configure CORS - specific origins required for credentials/cookies
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,  # Must be False when using allow_origins=["*"]
+    allow_origins=[
+        "https://www.de-bunker.com",
+        "http://localhost:5173",
+        "http://localhost:3000",
+    ],
+    allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD"],
     allow_headers=["*"],
 )
@@ -617,6 +621,7 @@ def get_client_ip(request: Request) -> str:
 @limiter.limit("30/minute")
 async def analyze_claim(
     request: Request,
+    response: Response,
     analysis_request: AnalysisRequest,
     authenticated: Optional[bool] = Depends(optional_verify_credentials),
     db: Session = Depends(get_db),
@@ -630,13 +635,24 @@ async def analyze_claim(
         raise HTTPException(status_code=503, detail="Fact checker not initialized")
 
     if authenticated is None:
-        ip = get_client_ip(request)
+        device_id = request.cookies.get("debunker_id")
+        if not device_id:
+            device_id = str(uuid.uuid4())
+
+        response.set_cookie(
+            "debunker_id", device_id,
+            max_age=365 * 24 * 3600,
+            httponly=True,
+            secure=True,
+            samesite="none"
+        )
+
         today = datetime.utcnow().strftime("%Y-%m-%d")
         usage = db.query(DailyUsage).filter(
-            DailyUsage.ip_address == ip, DailyUsage.date == today
+            DailyUsage.device_id == device_id, DailyUsage.date == today
         ).first()
         if usage is None:
-            usage = DailyUsage(ip_address=ip, date=today, count=0)
+            usage = DailyUsage(device_id=device_id, date=today, count=0)
             db.add(usage)
         if usage.count >= DAILY_ANON_LIMIT:
             raise HTTPException(
@@ -645,7 +661,7 @@ async def analyze_claim(
             )
         usage.count += 1
         db.commit()
-    
+
     logger.info("=" * 80)
     logger.info(f"🎯 NEW FACT-CHECK REQUEST [{request_id}]")
     logger.info(f"📝 Claim: '{analysis_request.text_claim[:100]}{'...' if len(analysis_request.text_claim) > 100 else ''}'")
@@ -1019,6 +1035,7 @@ async def analyze_claim(
 @app.post("/api/analyze-file", summary="Analyze Claim with File Upload")
 async def analyze_claim_with_file(
     request: Request,
+    response: Response,
     audio_file: UploadFile = File(..., description="Audio file to analyze"),
     text_claim: str = Form("", description="Optional text claim to fact-check"),
     authenticated: Optional[bool] = Depends(optional_verify_credentials),
@@ -1030,13 +1047,24 @@ async def analyze_claim_with_file(
         raise HTTPException(status_code=503, detail="Fact checker not initialized")
 
     if authenticated is None:
-        ip = get_client_ip(request)
+        device_id = request.cookies.get("debunker_id")
+        if not device_id:
+            device_id = str(uuid.uuid4())
+
+        response.set_cookie(
+            "debunker_id", device_id,
+            max_age=365 * 24 * 3600,
+            httponly=True,
+            secure=True,
+            samesite="none"
+        )
+
         today = datetime.utcnow().strftime("%Y-%m-%d")
         usage = db.query(DailyUsage).filter(
-            DailyUsage.ip_address == ip, DailyUsage.date == today
+            DailyUsage.device_id == device_id, DailyUsage.date == today
         ).first()
         if usage is None:
-            usage = DailyUsage(ip_address=ip, date=today, count=0)
+            usage = DailyUsage(device_id=device_id, date=today, count=0)
             db.add(usage)
         if usage.count >= DAILY_ANON_LIMIT:
             raise HTTPException(
