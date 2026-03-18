@@ -523,15 +523,6 @@ async def startup_event():
             if claims:
                 saved_count = await save_claims_to_database(claims)
                 logger.info(f"💾 Saved {saved_count} new claims to database")
-                
-                # Simple fact-check for immediate availability
-                if saved_count > 0:
-                    from scheduler import TrendingClaimsScheduler
-                    scheduler_instance = TrendingClaimsScheduler()
-                    fact_checked = await scheduler_instance._professional_fact_check_new_claims()
-                    logger.info(f"✅ Startup complete: {saved_count} claims discovered, {fact_checked} fact-checked!")
-                else:
-                    logger.info("ℹ️ No new claims (duplicates of existing)")
             else:
                 logger.warning("⚠️ No claims discovered at startup - will retry via background scheduler")
                 
