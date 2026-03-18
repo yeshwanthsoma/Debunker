@@ -31,8 +31,6 @@ import librosa
 import re
 import aiohttp
 from transformers import pipeline
-from sentence_transformers import SentenceTransformer
-import plotly.graph_objects as go
 import requests
 from contextlib import asynccontextmanager
 from config import get_settings, is_api_available, get_api_key
@@ -49,7 +47,6 @@ from database import get_db, TrendingClaim, ClaimSource, ClaimAnalytics, init_db
 from news_aggregator import NewsAggregator, save_claims_to_database
 from grok_integration import GrokSocialAnalyzer, enhance_trending_claim_with_grok
 from scheduler import start_background_scheduler, stop_background_scheduler, get_scheduler
-from startup_aggregation import run_startup_aggregation
 from sqlalchemy.orm import Session
 from sqlalchemy import desc, func
 
@@ -171,16 +168,6 @@ class AlternativeFactChecker:
                     model="openai/whisper-tiny",  # Use tiny for faster fallback
                     device=-1
                 )
-            
-            # Sentence embeddings
-            self.embeddings = SentenceTransformer('all-MiniLM-L6-v2')
-            
-            # Sentiment analysis
-            self.sentiment_analyzer = pipeline(
-                "sentiment-analysis",
-                model="cardiffnlp/twitter-roberta-base-sentiment-latest",
-                device=-1
-            )
             
             logger.info("✅ Models initialized successfully!")
         except Exception as e:
@@ -398,18 +385,11 @@ class AlternativeFactChecker:
         # Analyze credibility
         credibility = self.analyze_claim_credibility(claim)
         
-        # Sentiment analysis
-        try:
-            sentiment = self.sentiment_analyzer(claim)
-            sentiment_label = sentiment[0]['label'] if sentiment else 'NEUTRAL'
-        except:
-            sentiment_label = 'NEUTRAL'
-        
         return {
             'verdict': verdict,
             'confidence': confidence,
             'explanation': explanation,
-            'evidence': f"Analysis based on pattern matching and knowledge base lookup. Sentiment: {sentiment_label}",
+            'evidence': "Analysis based on pattern matching and knowledge base lookup.",
             'sources': "Built-in knowledge base with scientific consensus data",
             'warnings': "This analysis uses a simplified fact-checking approach - upgrade to professional APIs for enhanced verification",
             'prosody_impact': f"Sarcasm probability: {prosody_features.get('sarcasm_probability', 0):.2%}",
