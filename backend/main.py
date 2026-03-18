@@ -606,6 +606,13 @@ async def health_check():
 
 DAILY_ANON_LIMIT = 3
 
+def get_client_ip(request: Request) -> str:
+    """Extract real client IP, respecting X-Forwarded-For set by Railway's proxy."""
+    forwarded_for = request.headers.get("X-Forwarded-For")
+    if forwarded_for:
+        return forwarded_for.split(",")[0].strip()
+    return request.client.host
+
 @app.post("/api/analyze", response_model=AnalysisResponse)
 @limiter.limit("30/minute")
 async def analyze_claim(
@@ -623,7 +630,7 @@ async def analyze_claim(
         raise HTTPException(status_code=503, detail="Fact checker not initialized")
 
     if authenticated is None:
-        ip = get_remote_address(request)
+        ip = get_client_ip(request)
         today = datetime.utcnow().strftime("%Y-%m-%d")
         usage = db.query(DailyUsage).filter(
             DailyUsage.ip_address == ip, DailyUsage.date == today
@@ -1023,7 +1030,7 @@ async def analyze_claim_with_file(
         raise HTTPException(status_code=503, detail="Fact checker not initialized")
 
     if authenticated is None:
-        ip = get_remote_address(request)
+        ip = get_client_ip(request)
         today = datetime.utcnow().strftime("%Y-%m-%d")
         usage = db.query(DailyUsage).filter(
             DailyUsage.ip_address == ip, DailyUsage.date == today
