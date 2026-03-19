@@ -65,8 +65,40 @@ logger = logging.getLogger(__name__)
 # Request tracking
 request_counter = 0
 
-# Initialize rate limiter
-limiter = Limiter(key_func=get_remote_address)
+# Custom key function to get real client IP behind proxy (Railway, etc.)
+def get_real_client_ip(request: Request) -> str:
+    """Extract real client IP from X-Forwarded-For header or fall back to remote address."""
+    # Railway and other proxies set X-Forwarded-For
+    forwarded_for = request.headers.get("X-Forwarded-For")
+    if forwarded_for:
+        # X-Forwarded-For can contain multiple IPs: "client, proxy1, proxy2"
+        # The first one is the original client
+        real_ip = forwarded_for.split(",")[0].strip()
+        return real_ip
+
+    # Also check X-Real-IP header (used by some proxies)
+    real_ip = request.headers.get("X-Real-IP")
+    if real_ip:
+        return real_ip.strip()
+
+    # Fall back to direct client IP
+    return request.client.host if request.client else "unknown"
+
+# Initialize rate limiter with Redis backend if available
+redis_url = os.getenv("REDIS_URL")
+if redis_url:
+    logger.info(f"🔒 Rate limiter using Redis backend")
+    limiter = Limiter(
+        key_func=get_real_client_ip,
+        storage_uri=redis_url,
+        default_limits=["200 per day", "50 per hour"]
+    )
+else:
+    logger.warning("⚠️ Rate limiter using in-memory storage (not recommended for production)")
+    limiter = Limiter(
+        key_func=get_real_client_ip,
+        default_limits=["200 per day", "50 per hour"]
+    )
 
 # Initialize FastAPI app with lifespan
 @asynccontextmanager
