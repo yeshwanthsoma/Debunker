@@ -606,7 +606,7 @@ async def analyze_claim(
         raise HTTPException(status_code=503, detail="Fact checker not initialized")
 
     if authenticated is None:
-        device_id = request.cookies.get("debunker_id")
+        device_id = request.headers.get("X-Device-ID") or request.cookies.get("debunker_id")
         if not device_id:
             device_id = str(uuid.uuid4())
 
@@ -1018,7 +1018,7 @@ async def analyze_claim_with_file(
         raise HTTPException(status_code=503, detail="Fact checker not initialized")
 
     if authenticated is None:
-        device_id = request.cookies.get("debunker_id")
+        device_id = request.headers.get("X-Device-ID") or request.cookies.get("debunker_id")
         if not device_id:
             device_id = str(uuid.uuid4())
 
