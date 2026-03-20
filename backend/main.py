@@ -86,15 +86,26 @@ def get_real_client_ip(request: Request) -> str:
 
 # Initialize rate limiter with Redis backend if available
 redis_url = os.getenv("REDIS_URL")
+limiter = None
+
 if redis_url:
-    logger.info(f"🔒 Rate limiter using Redis backend")
-    limiter = Limiter(
-        key_func=get_real_client_ip,
-        storage_uri=redis_url,
-        default_limits=["200 per day", "50 per hour"]
-    )
-else:
-    logger.warning("⚠️ Rate limiter using in-memory storage (not recommended for production)")
+    try:
+        # Check if redis package is available first
+        import importlib.util
+        if importlib.util.find_spec("redis") is not None:
+            logger.info(f"🔒 Rate limiter using Redis backend")
+            limiter = Limiter(
+                key_func=get_real_client_ip,
+                storage_uri=redis_url,
+                default_limits=["200 per day", "50 per hour"]
+            )
+        else:
+            logger.warning("⚠️ redis package not installed - falling back to in-memory storage")
+    except Exception as e:
+        logger.warning(f"⚠️ Redis setup failed ({e}) - falling back to in-memory storage")
+
+if limiter is None:
+    logger.info("📝 Rate limiter using in-memory storage")
     limiter = Limiter(
         key_func=get_real_client_ip,
         default_limits=["200 per day", "50 per hour"]
