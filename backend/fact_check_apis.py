@@ -434,7 +434,7 @@ class OpenAIFactChecker:
         """Create an advanced fact-checking prompt leveraging GPT-4o's internet access"""
         prompt = f"""You are an expert fact-checker with real-time internet access. Use current, authoritative sources to verify claims with scientific rigor.
 
-ANALYSIS TARGET: "{claim}"
+ANALYSIS TARGET: <claim>{claim}</claim>
 {f"CONTEXT: {context}" if context else ""}
 
 METHODOLOGY:
@@ -515,7 +515,7 @@ Use your internet access to find the most current and authoritative information 
             sub_claims_text = "\n".join(f"- {sc}" for sc in sub_claims)
             sub_claims_section = f"\n\nATOMIC SUB-CLAIMS TO VERIFY INDIVIDUALLY:\n{sub_claims_text}\n"
 
-        prompt = f"""Fact-check this claim using real-time web search: "{claim}"
+        prompt = f"""Fact-check this claim using real-time web search: <claim>{claim}</claim>
 {f"Context: {context}" if context else ""}{sub_claims_section}
 
 SEARCH STRATEGY:
@@ -526,10 +526,10 @@ SEARCH STRATEGY:
 5. Cross-reference multiple reliable sources
 
 SEARCH QUERIES TO USE:
-- "{claim}" fact check
-- "{claim}" Reuters OR "AP News" OR BBC
-- "{claim}" scientific study research
-- "{claim}" government official statement
+- <claim>{claim}</claim> fact check
+- <claim>{claim}</claim> Reuters OR "AP News" OR BBC
+- <claim>{claim}</claim> scientific study research
+- <claim>{claim}</claim> government official statement
 
 REQUIRED OUTPUT FORMAT (JSON):
 {{

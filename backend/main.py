@@ -35,7 +35,7 @@ import requests
 from contextlib import asynccontextmanager
 from config import get_settings, is_api_available, get_api_key
 from fact_check_apis import MultiSourceFactChecker
-from auth import verify_credentials, get_current_user, is_admin_request
+from auth import verify_credentials, verify_admin, get_current_user, is_admin_request
 from models import (
     AnalysisResponse, ProsodyAnalysis, SourceInfo,
     EvidenceAssessment, DebateContent, CredibilityMetrics, ExpertOpinion,
@@ -65,23 +65,22 @@ logger = logging.getLogger(__name__)
 # Request tracking
 request_counter = 0
 
-# Custom key function to get real client IP behind proxy (Railway, etc.)
-def get_real_client_ip(request: Request) -> str:
-    """Extract real client IP from X-Forwarded-For header or fall back to remote address."""
-    # Railway and other proxies set X-Forwarded-For
-    forwarded_for = request.headers.get("X-Forwarded-For")
-    if forwarded_for:
-        # X-Forwarded-For can contain multiple IPs: "client, proxy1, proxy2"
-        # The first one is the original client
-        real_ip = forwarded_for.split(",")[0].strip()
-        return real_ip
+# Rate limit key: authenticated username (verified, cannot be spoofed via headers).
+# Falls back to direct client IP for unauthenticated requests — never trusts
+# X-Forwarded-For or X-Real-IP, which an attacker controls.
+import base64 as _base64
 
-    # Also check X-Real-IP header (used by some proxies)
-    real_ip = request.headers.get("X-Real-IP")
-    if real_ip:
-        return real_ip.strip()
-
-    # Fall back to direct client IP
+def get_rate_limit_key(request: Request) -> str:
+    """Use authenticated username as rate limit key to prevent IP-spoofing bypass."""
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Basic "):
+        try:
+            credentials = _base64.b64decode(auth_header[6:]).decode("utf-8")
+            username, _ = credentials.split(":", 1)
+            return f"user:{username}"
+        except Exception:
+            pass
+    # Unauthenticated: use direct connection IP only (no proxy header trust)
     return request.client.host if request.client else "unknown"
 
 # Initialize rate limiter with Redis backend if available
@@ -95,7 +94,7 @@ if redis_url:
         if importlib.util.find_spec("redis") is not None:
             logger.info(f"🔒 Rate limiter using Redis backend")
             limiter = Limiter(
-                key_func=get_real_client_ip,
+                key_func=get_rate_limit_key,
                 storage_uri=redis_url,
                 default_limits=["100 per day", "30 per hour"]
             )
@@ -107,7 +106,7 @@ if redis_url:
 if limiter is None:
     logger.info("📝 Rate limiter using in-memory storage")
     limiter = Limiter(
-        key_func=get_real_client_ip,
+        key_func=get_rate_limit_key,
         default_limits=["100 per day", "30 per hour"]
     )
 
@@ -638,24 +637,27 @@ def _check_and_update_quota(request: Request, response: Response, db: Session) -
     if is_admin_request(request):
         return  # Admin bypasses quota
 
-    device_id = request.headers.get("X-Device-ID") or request.cookies.get("debunker_id")
-    if not device_id:
-        device_id = str(uuid.uuid4())
+    # Derive quota key from verified Basic Auth username — not client-supplied headers.
+    # X-Device-ID and cookies are attacker-controlled and must not drive quota enforcement.
+    auth_header = request.headers.get("Authorization", "")
+    quota_key = None
+    if auth_header.startswith("Basic "):
+        try:
+            credentials = _base64.b64decode(auth_header[6:]).decode("utf-8")
+            username, _ = credentials.split(":", 1)
+            quota_key = f"user:{username}"
+        except Exception:
+            pass
 
-    response.set_cookie(
-        "debunker_id", device_id,
-        max_age=365 * 24 * 3600,
-        httponly=True,
-        secure=True,
-        samesite="none"
-    )
+    if not quota_key:
+        raise HTTPException(status_code=401, detail="Authentication required for quota tracking")
 
     today = datetime.utcnow().strftime("%Y-%m-%d")
     usage = db.query(DailyUsage).filter(
-        DailyUsage.device_id == device_id, DailyUsage.date == today
+        DailyUsage.device_id == quota_key, DailyUsage.date == today
     ).first()
     if usage is None:
-        usage = DailyUsage(device_id=device_id, date=today, count=0)
+        usage = DailyUsage(device_id=quota_key, date=today, count=0)
         db.add(usage)
     if usage.count >= DAILY_USER_LIMIT:
         raise HTTPException(
@@ -664,6 +666,16 @@ def _check_and_update_quota(request: Request, response: Response, db: Session) -
         )
     usage.count += 1
     db.commit()
+
+    # Still set cookie for frontend UX tracking — but it no longer controls quota.
+    device_id = request.cookies.get("debunker_id") or str(uuid.uuid4())
+    response.set_cookie(
+        "debunker_id", device_id,
+        max_age=365 * 24 * 3600,
+        httponly=True,
+        secure=True,
+        samesite="none"
+    )
 
 
 async def _analyze_claim_internal(analysis_request: AnalysisRequest) -> AnalysisResponse:
@@ -1104,6 +1116,8 @@ async def analyze_claim_with_file(
 
         return result.model_dump()
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"❌ Error during file analysis: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
@@ -1143,21 +1157,48 @@ async def process_audio_data(audio_data: str) -> str:
             }
         )
 
+ALLOWED_AUDIO_EXTENSIONS = {'.wav', '.mp3', '.m4a', '.ogg', '.webm', '.mpeg'}
+
 async def save_uploaded_file(audio_file: UploadFile) -> str:
     """Save uploaded file and return path"""
     try:
         # Get file extension from uploaded filename
         import os
-        file_extension = os.path.splitext(audio_file.filename)[1] if audio_file.filename else '.wav'
-        
+        file_extension = os.path.splitext(audio_file.filename or '')[1].lower()
+
         # Default to .wav if no extension found
         if not file_extension:
             file_extension = '.wav'
-        
+
+        # VULN-05: Allowlist validation
+        if file_extension not in ALLOWED_AUDIO_EXTENSIONS:
+            raise HTTPException(
+                status_code=400,
+                detail="Unsupported file type. Allowed: wav, mp3, m4a, ogg, webm"
+            )
+
+        # VULN-06: Chunked read with size limit
+        settings = get_settings()
+        max_size = settings.max_file_size
+        content = bytearray()
+        chunk_size = 1024 * 1024  # 1 MB
+        while True:
+            chunk = await audio_file.read(chunk_size)
+            if not chunk:
+                break
+            content += chunk
+            if len(content) > max_size:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"File too large. Maximum allowed size is {max_size // 1024 // 1024} MB."
+                )
+        content = bytes(content)
+
         with tempfile.NamedTemporaryFile(delete=False, suffix=file_extension) as temp_file:
-            content = await audio_file.read()
             temp_file.write(content)
             return temp_file.name
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error saving uploaded file: {e}")
         raise HTTPException(status_code=400, detail="Failed to save uploaded file")
@@ -1671,7 +1712,7 @@ async def get_trending_claim_detail(
 @limiter.limit("5/minute")
 async def trigger_news_aggregation(
     request: Request,
-    authenticated: bool = Depends(verify_credentials)
+    authenticated: bool = Depends(verify_admin)
 ):
     """Manually trigger news aggregation and claim discovery"""
     try:
@@ -1916,8 +1957,11 @@ async def enhance_claim_with_grok(
         raise HTTPException(status_code=500, detail="Enhancement failed")
 
 @app.get("/api/grok/trending-claims")
+@limiter.limit("10/minute")
 async def get_grok_trending_claims(
-    categories: Optional[str] = None
+    request: Request,
+    categories: Optional[str] = None,
+    authenticated: bool = Depends(verify_credentials),
 ):
     """Get trending claims discovered by Grok from social media"""
     try:

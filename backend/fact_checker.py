@@ -86,21 +86,46 @@ class EnhancedFactChecker:
         
         print("✅ Models initialized successfully!")
     
+    def _compute_index_hash(self, index_path: str) -> str:
+        h = hashlib.sha256()
+        for fname in sorted(os.listdir(index_path)):
+            fpath = os.path.join(index_path, fname)
+            if os.path.isfile(fpath):
+                with open(fpath, 'rb') as f:
+                    h.update(f.read())
+        return h.hexdigest()
+
+    def _save_index_hash(self, index_path: str) -> None:
+        with open(index_path + ".sha256", 'w') as f:
+            f.write(self._compute_index_hash(index_path))
+
+    def _verify_index_hash(self, index_path: str) -> bool:
+        hash_file = index_path + ".sha256"
+        if not os.path.exists(hash_file):
+            return False
+        with open(hash_file) as f:
+            return f.read().strip() == self._compute_index_hash(index_path)
+
     def build_enhanced_index(self):
         """Build a more comprehensive knowledge base"""
         index_path = "enhanced_faiss_index"
-        
+
         if os.path.exists(index_path):
             print("📚 Loading existing enhanced index...")
-            try:
-                self.vectorstore = FAISS.load_local(
-                    index_path, 
-                    embeddings=self.embeddings, 
-                    allow_dangerous_deserialization=True
-                )
-                return
-            except Exception as e:
-                print(f"⚠️ Error loading index: {e}. Rebuilding...")
+            if self._verify_index_hash(index_path):
+                try:
+                    self.vectorstore = FAISS.load_local(
+                        index_path,
+                        embeddings=self.embeddings,
+                        allow_dangerous_deserialization=True
+                    )
+                    return
+                except Exception as e:
+                    print(f"⚠️ Error loading index: {e}. Rebuilding...")
+            else:
+                print("⚠️ FAISS index integrity check failed — rebuilding")
+                import shutil
+                shutil.rmtree(index_path, ignore_errors=True)
         
         print("🏗️ Building enhanced knowledge base...")
         
@@ -162,6 +187,7 @@ class EnhancedFactChecker:
             print(f"📊 Indexing {len(sources)} documents...")
             self.vectorstore = FAISS.from_texts(sources, self.embeddings)
             self.vectorstore.save_local(index_path)
+            self._save_index_hash(index_path)
             
             # Save metadata
             with open("enhanced_sources.pkl", "wb") as f:
