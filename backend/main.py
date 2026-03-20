@@ -632,51 +632,48 @@ def get_client_ip(request: Request) -> str:
 # Daily limit for regular users (admin users are unlimited)
 DAILY_USER_LIMIT = 3
 
-@app.post("/api/analyze", response_model=AnalysisResponse)
-@limiter.limit("10/minute", exempt_when=is_admin_request)
-async def analyze_claim(
-    request: Request,
-    response: Response,
-    analysis_request: AnalysisRequest,
-    authenticated: bool = Depends(verify_credentials),
-    db: Session = Depends(get_db),
-):
-    """Analyze a claim. Requires authentication. Regular users limited to 3/day; admin unlimited."""
+
+def _check_and_update_quota(request: Request, response: Response, db: Session) -> None:
+    """Check and update daily quota for regular users. Admin users bypass this."""
+    if is_admin_request(request):
+        return  # Admin bypasses quota
+
+    device_id = request.headers.get("X-Device-ID") or request.cookies.get("debunker_id")
+    if not device_id:
+        device_id = str(uuid.uuid4())
+
+    response.set_cookie(
+        "debunker_id", device_id,
+        max_age=365 * 24 * 3600,
+        httponly=True,
+        secure=True,
+        samesite="none"
+    )
+
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    usage = db.query(DailyUsage).filter(
+        DailyUsage.device_id == device_id, DailyUsage.date == today
+    ).first()
+    if usage is None:
+        usage = DailyUsage(device_id=device_id, date=today, count=0)
+        db.add(usage)
+    if usage.count >= DAILY_USER_LIMIT:
+        raise HTTPException(
+            status_code=429,
+            detail="You've used your 3 free checks for today. Come back tomorrow or upgrade to admin access!"
+        )
+    usage.count += 1
+    db.commit()
+
+
+async def _analyze_claim_internal(analysis_request: AnalysisRequest) -> AnalysisResponse:
+    """Internal analysis logic - no rate limiting or quota checks."""
     global request_counter
     request_counter += 1
     request_id = f"REQ-{request_counter:04d}"
 
     if not fact_checker:
         raise HTTPException(status_code=503, detail="Fact checker not initialized")
-
-    # Apply daily quota for regular users (admin users bypass this)
-    if not is_admin_request(request):
-        device_id = request.headers.get("X-Device-ID") or request.cookies.get("debunker_id")
-        if not device_id:
-            device_id = str(uuid.uuid4())
-
-        response.set_cookie(
-            "debunker_id", device_id,
-            max_age=365 * 24 * 3600,
-            httponly=True,
-            secure=True,
-            samesite="none"
-        )
-
-        today = datetime.utcnow().strftime("%Y-%m-%d")
-        usage = db.query(DailyUsage).filter(
-            DailyUsage.device_id == device_id, DailyUsage.date == today
-        ).first()
-        if usage is None:
-            usage = DailyUsage(device_id=device_id, date=today, count=0)
-            db.add(usage)
-        if usage.count >= DAILY_USER_LIMIT:
-            raise HTTPException(
-                status_code=429,
-                detail="You've used your 3 free checks for today. Come back tomorrow or upgrade to admin access!"
-            )
-        usage.count += 1
-        db.commit()
 
     logger.info("=" * 80)
     logger.info(f"🎯 NEW FACT-CHECK REQUEST [{request_id}]")
@@ -1048,7 +1045,23 @@ async def analyze_claim(
                 }
             )
 
+
+@app.post("/api/analyze", response_model=AnalysisResponse)
+@limiter.limit("10/minute")
+async def analyze_claim(
+    request: Request,
+    response: Response,
+    analysis_request: AnalysisRequest,
+    authenticated: bool = Depends(verify_credentials),
+    db: Session = Depends(get_db),
+):
+    """Analyze a claim. Requires authentication. Regular users limited to 3/day; admin unlimited."""
+    _check_and_update_quota(request, response, db)
+    return await _analyze_claim_internal(analysis_request)
+
+
 @app.post("/api/analyze-file", summary="Analyze Claim with File Upload")
+@limiter.limit("10/minute")
 async def analyze_claim_with_file(
     request: Request,
     response: Response,
@@ -1058,34 +1071,37 @@ async def analyze_claim_with_file(
     db: Session = Depends(get_db),
     enable_prosody: bool = Form(True, description="Enable prosody analysis")
 ):
-    """Analyze a claim with file upload support. Requires authentication."""
+    """Analyze a claim with file upload support. Requires authentication. Regular users limited to 3/day; admin unlimited."""
     if not fact_checker:
         raise HTTPException(status_code=503, detail="Fact checker not initialized")
 
+    # Check quota (admin bypasses)
+    _check_and_update_quota(request, response, db)
+
     logger.info(f"📝 Received file analysis request")
-    
+
     try:
         # Save uploaded file
         logger.info(f"🎤 Processing uploaded audio file: {audio_file.filename}")
         audio_file_path = await save_uploaded_file(audio_file)
-        
+
         # Convert to base64 for processing
         import base64
         with open(audio_file_path, 'rb') as f:
             audio_data = base64.b64encode(f.read()).decode('utf-8')
-        
+
         analysis_request = AnalysisRequest(
             text_claim=text_claim or "",
             audio_data=audio_data,
             enable_prosody=enable_prosody
         )
-        
-        result = await analyze_claim(request, response, analysis_request, authenticated=True, db=db)
-        
+
+        result = await _analyze_claim_internal(analysis_request)
+
         # Clean up temporary file
         if audio_file_path and os.path.exists(audio_file_path):
             os.unlink(audio_file_path)
-        
+
         return result.model_dump()
         
     except Exception as e:
@@ -1652,7 +1668,7 @@ async def get_trending_claim_detail(
         raise HTTPException(status_code=500, detail="Failed to fetch claim details")
 
 @app.post("/api/trigger-aggregation", response_model=AggregationTriggerResponse)
-@limiter.limit("5/minute", exempt_when=is_admin_request)
+@limiter.limit("5/minute")
 async def trigger_news_aggregation(
     request: Request,
     authenticated: bool = Depends(verify_credentials)
@@ -1834,7 +1850,7 @@ async def get_claim_social_context(
         raise HTTPException(status_code=500, detail="Failed to analyze social context")
 
 @app.post("/api/claims/{claim_id}/enhance-with-grok")
-@limiter.limit("10/minute", exempt_when=is_admin_request)
+@limiter.limit("10/minute")
 async def enhance_claim_with_grok(
     claim_id: int,
     request: Request,
@@ -1980,7 +1996,7 @@ async def get_scheduler_status():
         }
 
 @app.post("/api/scheduler/trigger/{job_id}")
-@limiter.limit("5/minute", exempt_when=is_admin_request)
+@limiter.limit("5/minute")
 async def trigger_scheduler_job(
     request: Request,
     job_id: str,
