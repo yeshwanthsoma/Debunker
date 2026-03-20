@@ -35,7 +35,7 @@ import requests
 from contextlib import asynccontextmanager
 from config import get_settings, is_api_available, get_api_key
 from fact_check_apis import MultiSourceFactChecker
-from auth import verify_credentials, get_current_user, optional_verify_credentials
+from auth import verify_credentials, get_current_user, is_admin_request
 from models import (
     AnalysisResponse, ProsodyAnalysis, SourceInfo,
     EvidenceAssessment, DebateContent, CredibilityMetrics, ExpertOpinion,
@@ -622,8 +622,6 @@ async def health_check():
         "timestamp": time.time()
     }
 
-DAILY_ANON_LIMIT = 3
-
 def get_client_ip(request: Request) -> str:
     """Extract real client IP, respecting X-Forwarded-For set by Railway's proxy."""
     forwarded_for = request.headers.get("X-Forwarded-For")
@@ -631,16 +629,19 @@ def get_client_ip(request: Request) -> str:
         return forwarded_for.split(",")[0].strip()
     return request.client.host
 
+# Daily limit for regular users (admin users are unlimited)
+DAILY_USER_LIMIT = 3
+
 @app.post("/api/analyze", response_model=AnalysisResponse)
-@limiter.limit("10/minute")
+@limiter.limit("10/minute", exempt_when=is_admin_request)
 async def analyze_claim(
     request: Request,
     response: Response,
     analysis_request: AnalysisRequest,
-    authenticated: Optional[bool] = Depends(optional_verify_credentials),
+    authenticated: bool = Depends(verify_credentials),
     db: Session = Depends(get_db),
 ):
-    """Analyze a claim. Anonymous users limited to 3 checks/day; admin is unlimited."""
+    """Analyze a claim. Requires authentication. Regular users limited to 3/day; admin unlimited."""
     global request_counter
     request_counter += 1
     request_id = f"REQ-{request_counter:04d}"
@@ -648,7 +649,8 @@ async def analyze_claim(
     if not fact_checker:
         raise HTTPException(status_code=503, detail="Fact checker not initialized")
 
-    if authenticated is None:
+    # Apply daily quota for regular users (admin users bypass this)
+    if not is_admin_request(request):
         device_id = request.headers.get("X-Device-ID") or request.cookies.get("debunker_id")
         if not device_id:
             device_id = str(uuid.uuid4())
@@ -668,10 +670,10 @@ async def analyze_claim(
         if usage is None:
             usage = DailyUsage(device_id=device_id, date=today, count=0)
             db.add(usage)
-        if usage.count >= DAILY_ANON_LIMIT:
+        if usage.count >= DAILY_USER_LIMIT:
             raise HTTPException(
                 status_code=429,
-                detail="This is a beta app! You've used your 3 free checks for today. Come back tomorrow!"
+                detail="You've used your 3 free checks for today. Come back tomorrow or upgrade to admin access!"
             )
         usage.count += 1
         db.commit()
@@ -1052,42 +1054,14 @@ async def analyze_claim_with_file(
     response: Response,
     audio_file: UploadFile = File(..., description="Audio file to analyze"),
     text_claim: str = Form("", description="Optional text claim to fact-check"),
-    authenticated: Optional[bool] = Depends(optional_verify_credentials),
+    authenticated: bool = Depends(verify_credentials),
     db: Session = Depends(get_db),
     enable_prosody: bool = Form(True, description="Enable prosody analysis")
 ):
-    """Analyze a claim with file upload support. Anonymous users limited to 3 checks/day."""
+    """Analyze a claim with file upload support. Requires authentication."""
     if not fact_checker:
         raise HTTPException(status_code=503, detail="Fact checker not initialized")
 
-    if authenticated is None:
-        device_id = request.headers.get("X-Device-ID") or request.cookies.get("debunker_id")
-        if not device_id:
-            device_id = str(uuid.uuid4())
-
-        response.set_cookie(
-            "debunker_id", device_id,
-            max_age=365 * 24 * 3600,
-            httponly=True,
-            secure=True,
-            samesite="none"
-        )
-
-        today = datetime.utcnow().strftime("%Y-%m-%d")
-        usage = db.query(DailyUsage).filter(
-            DailyUsage.device_id == device_id, DailyUsage.date == today
-        ).first()
-        if usage is None:
-            usage = DailyUsage(device_id=device_id, date=today, count=0)
-            db.add(usage)
-        if usage.count >= DAILY_ANON_LIMIT:
-            raise HTTPException(
-                status_code=429,
-                detail="This is a beta app! You've used your 3 free checks for today. Come back tomorrow!"
-            )
-        usage.count += 1
-        db.commit()
-    
     logger.info(f"📝 Received file analysis request")
     
     try:
@@ -1678,7 +1652,7 @@ async def get_trending_claim_detail(
         raise HTTPException(status_code=500, detail="Failed to fetch claim details")
 
 @app.post("/api/trigger-aggregation", response_model=AggregationTriggerResponse)
-@limiter.limit("5/minute")  # Limit to prevent abuse
+@limiter.limit("5/minute", exempt_when=is_admin_request)
 async def trigger_news_aggregation(
     request: Request,
     authenticated: bool = Depends(verify_credentials)
@@ -1860,7 +1834,7 @@ async def get_claim_social_context(
         raise HTTPException(status_code=500, detail="Failed to analyze social context")
 
 @app.post("/api/claims/{claim_id}/enhance-with-grok")
-@limiter.limit("10/minute")
+@limiter.limit("10/minute", exempt_when=is_admin_request)
 async def enhance_claim_with_grok(
     claim_id: int,
     request: Request,
@@ -2006,7 +1980,7 @@ async def get_scheduler_status():
         }
 
 @app.post("/api/scheduler/trigger/{job_id}")
-@limiter.limit("5/minute")
+@limiter.limit("5/minute", exempt_when=is_admin_request)
 async def trigger_scheduler_job(
     request: Request,
     job_id: str,
