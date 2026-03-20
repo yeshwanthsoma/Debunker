@@ -4,7 +4,7 @@ Configuration management for TruthLens Fact Checker
 
 import os
 from typing import Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from pydantic_settings import BaseSettings
 from functools import lru_cache
 
@@ -71,27 +71,27 @@ class Settings(BaseSettings):
     database_url: str = Field(default="sqlite:///./debunker.db")
     database_pool_size: int = Field(default=5)
     database_echo: bool = Field(default=False)
-    
+
     # Railway Environment Detection
     railway_environment: Optional[str] = Field(default=None)
-    
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        # Railway environment detection and PostgreSQL configuration
+
+    # CORS Settings
+    cors_origins: list = Field(default=["*"])
+    cors_allow_credentials: bool = Field(default=True)
+
+    @model_validator(mode='after')
+    def configure_railway_database(self) -> 'Settings':
+        """Normalise DATABASE_URL for Railway / PostgreSQL environments."""
         if self.railway_environment or os.getenv('DATABASE_URL'):
             database_url = os.getenv('DATABASE_URL')
             if database_url:
                 if database_url.startswith('postgres://'):
-                    # Fix for newer PostgreSQL drivers
                     database_url = database_url.replace('postgres://', 'postgresql://', 1)
-                self.database_url = database_url
-                print(f"🚀 Railway environment detected - using PostgreSQL")
+                object.__setattr__(self, 'database_url', database_url)
+                print("🚀 Railway environment detected - using PostgreSQL")
             else:
-                print(f"💻 Local environment detected - using SQLite")
-    
-    # CORS Settings
-    cors_origins: list = Field(default=["*"])
-    cors_allow_credentials: bool = Field(default=True)
+                print("💻 Local environment detected - using SQLite")
+        return self
     
     model_config = {
         "env_file": ".env",

@@ -3,14 +3,11 @@
 # Core FastAPI and web framework
 fastapi>=0.104.0
 uvicorn[standard]>=0.24.0
-python-multipart
+python-multipart>=0.0.9
 
 # Rate limiting and security
 slowapi>=0.1.9
-python-jose[cryptography]
-
-# Enhanced middleware
-python-multipart
+python-jose[cryptography]>=3.3.0
 starlette
 
 # Input validation

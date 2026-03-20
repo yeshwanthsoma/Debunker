@@ -5,7 +5,7 @@ Database configuration and models for trending claims feature
 from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Text, Boolean, ForeignKey, JSON, UniqueConstraint
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session, relationship
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 import os
 from config import get_settings
@@ -60,7 +60,7 @@ class TrendingClaim(Base):
     # Source and discovery info
     source_type = Column(String(50), nullable=False)  # news, reddit, twitter, etc.
     source_url = Column(String(1000), nullable=True)
-    discovered_at = Column(DateTime, default=datetime.utcnow, index=True)
+    discovered_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
     processed_at = Column(DateTime, nullable=True)
     
     # Engagement and trending metrics
@@ -110,7 +110,7 @@ class ClaimSource(Base):
     bias_score = Column(Float, nullable=True)  # -1.0 to 1.0 (left to right)
     
     # Timestamps
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     
     # Relationships
     claim = relationship("TrendingClaim", back_populates="sources")
@@ -123,7 +123,7 @@ class ClaimAnalytics(Base):
     claim_id = Column(Integer, ForeignKey("trending_claims.id"), nullable=False)
     
     # Daily metrics
-    date = Column(DateTime, default=datetime.utcnow, index=True)
+    date = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
     daily_views = Column(Integer, default=0)
     daily_shares = Column(Integer, default=0)
     daily_clicks = Column(Integer, default=0)
@@ -169,8 +169,8 @@ class NewsSource(Base):
     language = Column(String(10), default="en")
     
     # Timestamps
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 # Database dependency for FastAPI
 def get_db() -> Session:

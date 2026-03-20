@@ -22,36 +22,36 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Development Commands
 
-### Backend Development
+### Starting the Backend (Local)
+
+The venv lives at the **repo root** (`Debunker/venv`), not inside `backend/`.
+The app runs on **port 8080** (not 8000).
+Do **not** set `REDIS_URL` locally — the Docker Redis hostname (`redis://redis:6379`) is unreachable outside Docker and crashes the rate limiter.
+
 ```bash
-# Navigate to backend directory
-cd backend
+# From repo root
+cd /path/to/Debunker/backend
 
-# Install dependencies
-pip install -r requirements.txt
+# Start server (unset REDIS_URL to avoid local Redis crash)
+REDIS_URL="" uvicorn main:app --host 0.0.0.0 --port 8080
 
-# Start backend with auto-reload
-uvicorn main:app --reload --host 0.0.0.0 --port 8000
-
-# Run basic API test
-python ../test_api.py
+# With auto-reload during development
+REDIS_URL="" uvicorn main:app --host 0.0.0.0 --port 8080 --reload
 ```
 
-### Frontend Development  
+> **Note:** Startup takes ~30–60s because the news aggregator runs discovery calls to OpenAI at boot. Wait for `🎉 TruthLens startup complete!` in logs before testing.
+
+### Frontend Development
 ```bash
-# Navigate to frontend directory
 cd frontend-standalone
-
-# Serve with Python (simple)
 python -m http.server 3000
-
-# Or serve with live reload (if available)
+# or
 npx live-server --port=3000
 ```
 
 ### Docker Development
 ```bash
-# Start all services
+# Start all services (includes Redis)
 docker-compose up -d
 
 # View logs
@@ -62,10 +62,39 @@ docker-compose logs -f frontend
 docker-compose down
 ```
 
-### Testing
-- Main test script: `python test_api.py` (tests backend API endpoints)
-- Health check: `curl http://localhost:8000/health`
-- API docs: http://localhost:8000/docs (when backend is running)
+### E2E Testing (Manual)
+
+Credentials are in `backend/.env` (`API_USERNAME` / `API_PASSWORD`).
+
+```bash
+# 1. Health check
+curl http://localhost:8080/health
+
+# 2. API status (no auth needed)
+curl http://localhost:8080/api/status
+
+# 3. Trending claims (no auth needed)
+curl "http://localhost:8080/api/trending-claims?limit=3"
+
+# 4. Analyze a claim (auth required)
+curl -X POST http://localhost:8080/api/analyze \
+  -u "YOUR_USERNAME:YOUR_PASSWORD" \
+  -H "Content-Type: application/json" \
+  -d '{"text_claim": "The Earth is flat", "enable_prosody": false}'
+
+# 5. Verify 401 on unauthenticated request
+curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:8080/api/analyze \
+  -H "Content-Type: application/json" \
+  -d '{"text_claim": "test"}'
+# Expected: 401
+```
+
+Expected healthy responses:
+- `/health` → `{"status":"healthy","fact_checker_ready":true,...}`
+- `/api/analyze` → `{"verdict":"False","confidence":0.95,"provider":"Multi-Source Analysis",...}`
+
+### API Docs
+- Swagger UI: http://localhost:8080/docs (when backend is running)
 
 ## Architecture Overview
 

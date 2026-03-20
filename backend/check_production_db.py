@@ -16,7 +16,8 @@ async def check_production_status():
     print("🔍 Checking Production Database Status...")
     print("=" * 50)
     
-    async with aiohttp.ClientSession() as session:
+    timeout = aiohttp.ClientTimeout(total=30)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
         try:
             # Check if there's an API endpoint to get claims statistics
             # We'll try a few potential endpoints
