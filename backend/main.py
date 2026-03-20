@@ -97,7 +97,7 @@ if redis_url:
             limiter = Limiter(
                 key_func=get_real_client_ip,
                 storage_uri=redis_url,
-                default_limits=["200 per day", "50 per hour"]
+                default_limits=["100 per day", "30 per hour"]
             )
         else:
             logger.warning("⚠️ redis package not installed - falling back to in-memory storage")
@@ -108,7 +108,7 @@ if limiter is None:
     logger.info("📝 Rate limiter using in-memory storage")
     limiter = Limiter(
         key_func=get_real_client_ip,
-        default_limits=["200 per day", "50 per hour"]
+        default_limits=["100 per day", "30 per hour"]
     )
 
 # Initialize FastAPI app with lifespan
@@ -632,7 +632,7 @@ def get_client_ip(request: Request) -> str:
     return request.client.host
 
 @app.post("/api/analyze", response_model=AnalysisResponse)
-@limiter.limit("30/minute")
+@limiter.limit("10/minute")
 async def analyze_claim(
     request: Request,
     response: Response,
