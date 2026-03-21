@@ -362,7 +362,7 @@ PROSODY_IMPACT: [How audio analysis affected the assessment]
             print(f"⚠️ Fact-checking error: {e}")
             return {
                 'verdict': 'Error',
-                'confidence': 'Low',
+                'confidence': 0.1,
                 'explanation': f'Error during fact-checking: {str(e)}',
                 'evidence': 'N/A',
                 'sources': 'N/A',

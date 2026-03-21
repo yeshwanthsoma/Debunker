@@ -24,6 +24,20 @@ def _clean_url(url: str) -> str:
     url = url.strip('"\'').rstrip('.,;')
     return url
 
+def _normalize_verdict_str(rating: str) -> str:
+    """Normalize any verdict string to one of: True, False, Misleading, Unverifiable"""
+    r = rating.lower().strip()
+    if any(t in r for t in ["false", "incorrect", "fake", "debunked", "pants on fire"]):
+        return "False"
+    if any(t in r for t in ["misleading", "mixed", "partly", "mostly false", "mostly true", "with context", "nuance"]):
+        return "Misleading"
+    if any(t in r for t in ["true", "correct", "accurate", "confirmed"]):
+        return "True"
+    if any(t in r for t in ["unproven", "unverifiable", "unclear"]):
+        return "Unverifiable"
+    return "Unverifiable"
+
+
 @dataclass
 class FactCheckResult:
     """Standardized fact-check result"""
@@ -619,7 +633,8 @@ URL EXAMPLES:
                 parsed_data = json.loads(clean_content)
                 
                 # Extract data with fallbacks
-                verdict = parsed_data.get("verdict", "Unverifiable")
+                raw_verdict = parsed_data.get("verdict", "Unverifiable")
+                verdict = _normalize_verdict_str(raw_verdict)
                 confidence = float(parsed_data.get("confidence", 0.5))
                 explanation = parsed_data.get("explanation", "Analysis completed with web search")
                 
@@ -1869,8 +1884,9 @@ IMPORTANT:
         # Weight OpenAI analysis heavily (it has internet access and context understanding)
         openai_weight = 3.0
         for result in openai_results:
+            verdict_key = result.verdict if result.verdict in weighted_scores else _normalize_verdict_str(result.verdict)
             weight = openai_weight * result.confidence
-            weighted_scores[result.verdict] += weight
+            weighted_scores[verdict_key] += weight
             total_weight += weight
             confidence_sum += result.confidence * weight
             confidence_weights += weight
@@ -1879,8 +1895,9 @@ IMPORTANT:
         # Weight Grok analysis moderately (real-time social context, but can be influenced by social media bias)
         grok_weight = 2.0
         for result in grok_results:
+            verdict_key = result.verdict if result.verdict in weighted_scores else _normalize_verdict_str(result.verdict)
             weight = grok_weight * result.confidence
-            weighted_scores[result.verdict] += weight
+            weighted_scores[verdict_key] += weight
             total_weight += weight
             confidence_sum += result.confidence * weight
             confidence_weights += weight
