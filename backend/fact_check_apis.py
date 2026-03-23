@@ -96,16 +96,16 @@ Output: ["The moon landing was faked by Hollywood"]
 Respond with JSON array: ["claim1", "claim2"]"""
 
             payload = {
-                "model": "gpt-4o",
+                "model": "gpt-4.1-nano",
                 "messages": [
                     {"role": "user", "content": prompt}
                 ],
                 "max_tokens": 150,
                 "temperature": 0.1
             }
-            
+
             session = await self._get_session()
-            async with session.post("https://api.openai.com/v1/chat/completions", 
+            async with session.post("https://api.openai.com/v1/chat/completions",
                                   json=payload, headers=headers) as response:
                 if response.status == 200:
                     data = await response.json()
@@ -347,10 +347,10 @@ Respond with JSON array: ["claim1", "claim2"]"""
 
 class OpenAIFactChecker:
     """OpenAI-powered fact checking"""
-    
+
     def __init__(self):
         self.api_key = get_api_key("openai")
-        self.model = "gpt-4o"  # Using 4o for internet access
+        self.model = "gpt-4.1"  # Using 4.1 for internet access
         self.session = None
     
     async def _get_session(self):
@@ -1034,13 +1034,286 @@ Respond with JSON only:
             else:
                 return self._create_fallback_result(claim)
 
+class GeminiFactChecker:
+    """Gemini 2.5 Flash fact-checking with Google Search grounding"""
+
+    def __init__(self):
+        self.api_key = get_api_key("gemini")
+        self.model = "gemini-2.5-flash"
+        self.endpoint = (
+            "https://generativelanguage.googleapis.com/v1beta/models/"
+            "gemini-2.5-flash:generateContent"
+        )
+        self.session = None
+
+    async def _get_session(self):
+        """Get or create aiohttp session"""
+        if self.session is None:
+            timeout = aiohttp.ClientTimeout(total=90, connect=30)
+            self.session = aiohttp.ClientSession(timeout=timeout)
+        return self.session
+
+    async def close(self):
+        """Close HTTP session"""
+        if self.session:
+            await self.session.close()
+
+    async def analyze_claim(self, claim: str, context: Optional[str] = None) -> FactCheckResult:
+        """Analyze a claim using Gemini 2.5 Flash with Google Search grounding"""
+        if not is_api_available("gemini"):
+            logger.warning("🔑 Gemini API key not available")
+            return self._create_fallback_result(claim)
+
+        logger.info(f"♊ CALLING Gemini 2.5 Flash with Google Search grounding")
+        logger.info(f"   Claim: '{claim[:100]}{'...' if len(claim) > 100 else ''}'")
+
+        try:
+            session = await self._get_session()
+
+            prompt = self._create_fact_check_prompt(claim, context)
+
+            payload = {
+                "contents": [
+                    {
+                        "parts": [{"text": prompt}]
+                    }
+                ],
+                "tools": [{"google_search": {}}],
+                "generationConfig": {
+                    "maxOutputTokens": 800,
+                    "temperature": 0.1
+                }
+            }
+
+            params = {"key": self.api_key}
+
+            import time
+            start_time = time.time()
+
+            async with session.post(self.endpoint, params=params, json=payload) as response:
+                api_time = time.time() - start_time
+                logger.info(f"📡 Gemini API Response: {response.status} (took {api_time:.2f}s)")
+
+                if response.status == 200:
+                    data = await response.json()
+                    result = self._parse_gemini_response(data, claim)
+                    logger.info(
+                        f"✅ Gemini analysis complete: {result.verdict} "
+                        f"(confidence: {result.confidence:.2f})"
+                    )
+                    return result
+                else:
+                    error_text = await response.text()
+                    logger.error(f"❌ Gemini API error: {response.status}")
+                    logger.error(f"   Error details: {error_text[:200]}...")
+                    return self._create_fallback_result(claim)
+
+        except Exception as e:
+            logger.error(f"💥 Error calling Gemini API: {e}")
+            import traceback
+            logger.debug(f"   Traceback: {traceback.format_exc()}")
+            return self._create_fallback_result(claim)
+
+    def _create_fact_check_prompt(self, claim: str, context: Optional[str] = None) -> str:
+        """Create a fact-checking prompt for Gemini with Google Search grounding"""
+        from datetime import datetime
+        return f"""You are an expert fact-checker with real-time Google Search access. \
+Use search to find authoritative, current sources and verify this claim.
+
+ANALYSIS TARGET: <claim>{claim}</claim>
+{f"CONTEXT: {context}" if context else ""}
+
+SEARCH STRATEGY:
+1. Search for recent news and authoritative sources about this claim
+2. Check fact-checking sites: Snopes, PolitiFact, FactCheck.org, Reuters Fact Check
+3. Look for scientific studies or government agency statements if applicable
+4. Cross-reference multiple reliable sources
+
+VERDICT LOGIC:
+- FALSE: Core claim contradicts authoritative sources
+- MISLEADING: Contains some truth but significant inaccuracies or missing context
+- TRUE: Primary assertions confirmed by reliable sources
+- UNVERIFIABLE: Insufficient authoritative sources available
+
+CRITICAL: Respond ONLY with valid JSON. No markdown fences, no preamble, no extra text.
+
+{{
+    "verdict": "True|False|Misleading|Unverifiable",
+    "confidence": 0.85,
+    "explanation": "Evidence-based analysis in 2-3 sentences with specific source references",
+    "reasoning": "One sentence: how sources lead to this verdict",
+    "fact_check_date": "{datetime.now().strftime('%Y-%m-%d')}"
+}}"""
+
+    def _parse_gemini_response(self, data: Dict, claim: str) -> FactCheckResult:
+        """Parse Gemini API response into FactCheckResult"""
+        try:
+            # Extract text from candidates[0].content.parts[0].text
+            candidates = data.get("candidates", [])
+            if not candidates:
+                logger.error("No candidates in Gemini response")
+                return self._create_fallback_result(claim)
+
+            parts = candidates[0].get("content", {}).get("parts", [])
+            content = ""
+            for part in parts:
+                if "text" in part:
+                    content = part["text"]
+                    break
+
+            if not content:
+                logger.error("No text content in Gemini response")
+                return self._create_fallback_result(claim)
+
+            logger.debug(f"Gemini response content: {content[:500]}...")
+
+            # Extract grounding sources from groundingMetadata
+            grounding_sources = []
+            grounding_meta = candidates[0].get("groundingMetadata", {})
+            grounding_chunks = grounding_meta.get("groundingChunks", [])
+            for chunk in grounding_chunks:
+                web = chunk.get("web", {})
+                uri = web.get("uri", "")
+                title = web.get("title", "")
+                if uri:
+                    grounding_sources.append({
+                        "name": title or uri,
+                        "url": _clean_url(uri),
+                        "type": "gemini_grounding",
+                        "title": title
+                    })
+
+            # Parse JSON from content
+            try:
+                clean_content = content.strip()
+                if clean_content.startswith("```json"):
+                    clean_content = clean_content[7:]
+                if clean_content.startswith("```"):
+                    clean_content = clean_content[3:]
+                if clean_content.endswith("```"):
+                    clean_content = clean_content[:-3]
+                clean_content = clean_content.strip()
+
+                # Try direct parse first; if it fails, extract the first JSON object via regex
+                try:
+                    parsed_data = json.loads(clean_content)
+                except json.JSONDecodeError:
+                    import re as _re
+                    json_match = _re.search(r'\{[^{}]*"verdict"[^{}]*\}', clean_content, _re.DOTALL)
+                    if json_match:
+                        parsed_data = json.loads(json_match.group())
+                    else:
+                        raise
+
+                raw_verdict = parsed_data.get("verdict", "Unverifiable")
+                verdict = _normalize_verdict_str(raw_verdict)
+                confidence = float(parsed_data.get("confidence", 0.5))
+                explanation = parsed_data.get(
+                    "explanation", "Analysis completed with Google Search grounding"
+                )
+
+                # Build sources: prefer grounding metadata, fall back to evidence_found in JSON
+                web_sources = list(grounding_sources)  # copy
+                if not web_sources:
+                    evidence_found = parsed_data.get("evidence_found", [])
+                    for evidence in evidence_found:
+                        source_url = _clean_url(evidence.get("source_url", ""))
+                        source_name = evidence.get("source_name", "Unknown Source")
+                        article_title = evidence.get("article_title", "")
+                        if source_url and source_url.startswith("http"):
+                            web_sources.append({
+                                "name": source_name,
+                                "url": source_url,
+                                "type": "gemini_search",
+                                "title": article_title
+                            })
+                        else:
+                            web_sources.append({
+                                "name": source_name,
+                                "url": f"Web search: {source_name}",
+                                "type": "gemini_search",
+                                "title": article_title
+                            })
+
+                if not web_sources:
+                    web_sources = [{
+                        "name": "Gemini Google Search",
+                        "url": "Multiple sources via Google Search grounding",
+                        "type": "gemini_grounding",
+                        "title": ""
+                    }]
+
+                logger.info(
+                    f"   Gemini sources found: {len(web_sources)} | "
+                    f"Verdict: {verdict} (confidence: {confidence:.2f})"
+                )
+
+                return FactCheckResult(
+                    claim=claim,
+                    verdict=verdict,
+                    confidence=confidence,
+                    explanation=explanation,
+                    sources=web_sources[:5],
+                    provider="Gemini Web Search",
+                    timestamp=datetime.now()
+                )
+
+            except json.JSONDecodeError as e:
+                logger.warning(f"Failed to parse JSON from Gemini response: {e}")
+                # Text fallback
+                content_lower = content.lower()
+                if "false" in content_lower and "misleading" not in content_lower:
+                    verdict = "False"
+                    confidence = 0.7
+                elif "true" in content_lower and "misleading" not in content_lower:
+                    verdict = "True"
+                    confidence = 0.7
+                elif "misleading" in content_lower:
+                    verdict = "Misleading"
+                    confidence = 0.6
+                else:
+                    verdict = "Unverifiable"
+                    confidence = 0.5
+
+                return FactCheckResult(
+                    claim=claim,
+                    verdict=verdict,
+                    confidence=confidence,
+                    explanation=content[:500] + ("..." if len(content) > 500 else ""),
+                    sources=grounding_sources[:5] or [{
+                        "name": "Gemini Google Search",
+                        "url": "Multiple sources via Google Search grounding",
+                        "type": "gemini_grounding",
+                        "title": ""
+                    }],
+                    provider="Gemini Web Search (Text)",
+                    timestamp=datetime.now()
+                )
+
+        except Exception as e:
+            logger.error(f"Error parsing Gemini response: {e}")
+            return self._create_fallback_result(claim)
+
+    def _create_fallback_result(self, claim: str) -> FactCheckResult:
+        """Create a fallback result when Gemini API is unavailable"""
+        return FactCheckResult(
+            claim=claim,
+            verdict="Unverifiable",
+            confidence=0.1,
+            explanation="Gemini fact-checking service temporarily unavailable",
+            sources=[],
+            provider="Gemini (Fallback)",
+            timestamp=datetime.now()
+        )
+
+
 class GrokFactChecker:
     """Enhanced Grok-powered fact-checking using xAI Agent Tools API (web_search + x_search)"""
 
     def __init__(self):
         self.api_key = get_api_key("grok")
         self.base_url = "https://api.x.ai/v1"
-        self.model = "grok-4-1-fast"  # Optimized for tool calling
+        self.model = "grok-4-1-fast-non-reasoning"  # Optimized for tool calling
         self.session = None
     
     async def close(self):
@@ -1565,10 +1838,11 @@ CRITICAL REQUIREMENTS:
 
 class MultiSourceFactChecker:
     """Orchestrates multiple fact-checking sources"""
-    
+
     def __init__(self):
         self.google_checker = GoogleFactCheckAPI()
         self.openai_checker = OpenAIFactChecker()
+        self.gemini_checker = GeminiFactChecker()
         self.grok_checker = GrokFactChecker() if is_api_available("grok") else None
     
     async def close(self):
@@ -1577,12 +1851,17 @@ class MultiSourceFactChecker:
             await self.google_checker.close()
         except Exception as e:
             logger.warning(f"Error closing Google checker: {e}")
-        
+
         try:
             await self.openai_checker.close()
         except Exception as e:
             logger.warning(f"Error closing OpenAI checker: {e}")
-        
+
+        try:
+            await self.gemini_checker.close()
+        except Exception as e:
+            logger.warning(f"Error closing Gemini checker: {e}")
+
         if self.grok_checker:
             try:
                 await self.grok_checker.close()
@@ -1602,6 +1881,8 @@ class MultiSourceFactChecker:
             available_apis.append("OpenAI")
         if is_api_available("anthropic"):
             available_apis.append("Anthropic")
+        if is_api_available("gemini"):
+            available_apis.append("Gemini")
         if is_api_available("grok"):
             available_apis.append("Grok")
         
@@ -1650,6 +1931,11 @@ class MultiSourceFactChecker:
         if is_api_available("openai"):
             tasks.append(self._wrap_openai_result(self.openai_checker.analyze_claim(claim, context)))
             task_names.append("OpenAI")
+
+        # Gemini Analysis (Google Search grounding)
+        if is_api_available("gemini"):
+            tasks.append(self._wrap_gemini_result(self.gemini_checker.analyze_claim(claim, context)))
+            task_names.append("Gemini")
 
         # Grok Analysis (Real-time Social Context)
         if is_api_available("grok") and self.grok_checker:
@@ -1700,7 +1986,11 @@ class MultiSourceFactChecker:
     async def _wrap_openai_result(self, openai_task) -> FactCheckResult:
         """Wrapper to handle OpenAI task in gather"""
         return await openai_task
-    
+
+    async def _wrap_gemini_result(self, gemini_task) -> FactCheckResult:
+        """Wrapper to handle Gemini task in gather"""
+        return await gemini_task
+
     async def _wrap_grok_result(self, grok_task) -> FactCheckResult:
         """Wrapper to handle Grok task in gather"""
         return await grok_task
@@ -1762,7 +2052,7 @@ IMPORTANT:
         try:
             session = await self.openai_checker._get_session()
             payload = {
-                "model": "gpt-4o-mini",
+                "model": "gpt-4.1-nano",
                 "messages": [{"role": "user", "content": prompt}],
                 "max_tokens": 150,
                 "temperature": 0.1,
@@ -1833,7 +2123,8 @@ IMPORTANT:
             return [claim]
 
     async def _synthesize_results(self, claim: str, results: List[FactCheckResult]) -> Dict[str, Any]:
-        """Synthesize multiple fact-check results into a final assessment with improved weighting"""
+        """Synthesize multiple fact-check results using Claude Opus 4.6 as LLM judge.
+        Falls back to weighted-math synthesis if Anthropic API is unavailable."""
         if not results:
             return {
                 "verdict": "Unverifiable",
@@ -1847,23 +2138,228 @@ IMPORTANT:
                     "confidence_range": [0.0, 0.0]
                 }
             }
+
+        if is_api_available("anthropic"):
+            try:
+                return await self._synthesize_results_with_judge(claim, results)
+            except Exception as e:
+                logger.warning(
+                    f"Claude judge failed ({e}), falling back to weighted synthesis"
+                )
+
+        return await self._synthesize_results_fallback(claim, results)
+
+    async def _synthesize_results_with_judge(
+        self, claim: str, results: List[FactCheckResult]
+    ) -> Dict[str, Any]:
+        """Use Claude Opus 4.6 as an LLM judge to synthesize multiple fact-check results."""
+        import httpx
+
+        logger.info(f"⚖️  Calling Claude Opus 4.6 judge to synthesize {len(results)} results...")
+
+        # Separate results by provider
+        openai_results = [r for r in results if "OpenAI" in r.provider]
+        gemini_results = [r for r in results if "Gemini" in r.provider]
+        grok_results = [r for r in results if "Grok" in r.provider]
+        google_results = [r for r in results if "Google" in r.provider]
+
+        # Build source sections
+        source_sections = []
+
+        if openai_results:
+            r = openai_results[0]
+            source_sections.append(
+                f"[WEB SEARCH - OpenAI/Bing]\n"
+                f"Verdict: {r.verdict} | Confidence: {r.confidence:.2f}\n"
+                f"Evidence: {r.explanation[:400]}"
+            )
+
+        if gemini_results:
+            r = gemini_results[0]
+            source_sections.append(
+                f"[WEB SEARCH - Gemini/Google]\n"
+                f"Verdict: {r.verdict} | Confidence: {r.confidence:.2f}\n"
+                f"Evidence: {r.explanation[:400]}"
+            )
+
+        if grok_results:
+            r = grok_results[0]
+            source_sections.append(
+                f"[SOCIAL CONTEXT - Grok/X]\n"
+                f"Verdict: {r.verdict} | Confidence: {r.confidence:.2f}\n"
+                f"Social signals: {r.explanation[:400]}"
+            )
+
+        if google_results:
+            # Summarise top-3 Google DB results
+            summaries = []
+            for gr in google_results[:3]:
+                summaries.append(
+                    f"  - {gr.explanation[:200]} (source: "
+                    f"{gr.sources[0].get('name', 'Unknown') if gr.sources else 'Unknown'})"
+                )
+            source_sections.append(
+                f"[FACT-CHECK DATABASE - Google]\n"
+                f"Verdict: {google_results[0].verdict} | "
+                f"Confidence: {google_results[0].confidence:.2f}\n"
+                f"Database matches:\n" + "\n".join(summaries)
+            )
+
+        sources_text = "\n\n".join(source_sections) if source_sections else "(no source data)"
+
+        judge_prompt = f"""You are an expert fact-checking judge. Given independent analyses from multiple sources, \
+deliver a final calibrated verdict.
+
+CLAIM: <claim>{claim}</claim>
+
+SOURCE ANALYSES:
+{sources_text}
+
+INSTRUCTIONS:
+- Weigh evidence quality, not just source count
+- A Google Fact-Check DB result from Snopes/Reuters/PolitiFact is high-signal
+- Social media spread via Grok may reflect misinformation, not truth
+- If sources genuinely conflict, lower confidence and explain why
+- Be precise: "Misleading" means contains partial truth with significant gaps
+
+Respond ONLY with valid JSON:
+{{
+  "verdict": "True|False|Misleading|Unverifiable",
+  "confidence": 0.85,
+  "explanation": "one coherent paragraph for the end user",
+  "reasoning": "how you weighed sources and resolved conflicts (internal)",
+  "source_agreement": "agree|partial|conflict|single"
+}}"""
+
+        anthropic_key = get_api_key("anthropic")
+        headers = {
+            "x-api-key": anthropic_key,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json"
+        }
+        payload = {
+            "model": "claude-opus-4-6",
+            "max_tokens": 1024,
+            "temperature": 0.1,
+            "messages": [{"role": "user", "content": judge_prompt}]
+        }
+
+        async with httpx.AsyncClient(timeout=60) as client:
+            response = await client.post(
+                "https://api.anthropic.com/v1/messages",
+                headers=headers,
+                json=payload
+            )
+
+        if response.status_code != 200:
+            raise RuntimeError(
+                f"Anthropic API error {response.status_code}: {response.text[:200]}"
+            )
+
+        resp_data = response.json()
+        content_blocks = resp_data.get("content", [])
+        raw_text = ""
+        for block in content_blocks:
+            if block.get("type") == "text":
+                raw_text = block.get("text", "")
+                break
+
+        if not raw_text:
+            raise RuntimeError("No text content in Anthropic response")
+
+        # Parse JSON from judge response
+        clean_text = raw_text.strip()
+        if clean_text.startswith("```json"):
+            clean_text = clean_text[7:]
+        if clean_text.startswith("```"):
+            clean_text = clean_text[3:]
+        if clean_text.endswith("```"):
+            clean_text = clean_text[:-3]
+        clean_text = clean_text.strip()
+
+        judge_result = json.loads(clean_text)
+
+        verdict = _normalize_verdict_str(judge_result.get("verdict", "Unverifiable"))
+        confidence = float(judge_result.get("confidence", 0.5))
+        explanation = judge_result.get("explanation", "Multi-source analysis completed.")
+        source_agreement = judge_result.get("source_agreement", "single")
+        reasoning = judge_result.get("reasoning", "")
+
+        # Collect all sources
+        all_sources = []
+        for result in results:
+            all_sources.extend(result.sources)
+
+        # Build source_verdicts dict for details
+        source_verdicts = {}
+        if openai_results:
+            source_verdicts["OpenAI"] = openai_results[0].verdict
+        if gemini_results:
+            source_verdicts["Gemini"] = gemini_results[0].verdict
+        if grok_results:
+            source_verdicts["Grok"] = grok_results[0].verdict
+        if google_results:
+            source_verdicts["Google"] = google_results[0].verdict
+
+        logger.info(
+            f"⚖️  Judge verdict: {verdict} (confidence: {confidence:.2f}, "
+            f"agreement: {source_agreement})"
+        )
+
+        return {
+            "verdict": verdict,
+            "confidence": min(0.95, max(0.1, confidence)),
+            "explanation": explanation,
+            "sources": all_sources,
+            "provider": "Multi-Source Analysis",
+            "details": {
+                "source_count": len(results),
+                "openai_results": len(openai_results),
+                "gemini_results": len(gemini_results),
+                "grok_results": len(grok_results),
+                "google_results": len(google_results),
+                "primary_claims_extracted": self._extract_primary_claims(results),
+                "claim_evaluations": self._extract_claim_evaluations(results),
+                "web_sources_consulted": self._extract_web_sources(all_sources),
+                "source_agreement": source_agreement,
+                "source_verdicts": source_verdicts,
+                "reasoning": reasoning or (
+                    f"Claude Opus 4.6 judge [{source_agreement}]: "
+                    f"OpenAI ({len(openai_results)}) + "
+                    f"Gemini ({len(gemini_results)}) + "
+                    f"Grok ({len(grok_results)}) + "
+                    f"Google ({len(google_results)}) = {verdict}"
+                )
+            }
+        }
+
+    async def _synthesize_results_fallback(self, claim: str, results: List[FactCheckResult]) -> Dict[str, Any]:
+        """Fallback: synthesize multiple fact-check results into a final assessment with improved weighting"""
         
         logger.info(f"📊 Synthesizing {len(results)} results with improved logic...")
-        
+
         # Separate results by type for weighted analysis
         openai_results = []
         google_results = []
         grok_results = []
-        
+        gemini_results = []
+
         for result in results:
             if "OpenAI" in result.provider:
                 openai_results.append(result)
+            elif "Gemini" in result.provider:
+                gemini_results.append(result)
             elif "Google" in result.provider:
                 google_results.append(result)
             elif "Grok" in result.provider:
                 grok_results.append(result)
-        
-        logger.info(f"   OpenAI Results: {len(openai_results)}, Google Results: {len(google_results)}, Grok Results: {len(grok_results)}")
+
+        logger.info(
+            f"   OpenAI Results: {len(openai_results)}, "
+            f"Gemini Results: {len(gemini_results)}, "
+            f"Google Results: {len(google_results)}, "
+            f"Grok Results: {len(grok_results)}"
+        )
         
         # Enhanced Google result interpretation using LLM
         processed_google = await self._process_google_results_with_llm(google_results, claim)
@@ -1892,6 +2388,17 @@ IMPORTANT:
             confidence_weights += weight
             logger.info(f"   OpenAI: {result.verdict} (weight: {weight:.2f}, conf: {result.confidence:.2f})")
         
+        # Weight Gemini analysis similarly to OpenAI (independent web search with Google Search grounding)
+        gemini_weight = 3.0
+        for result in gemini_results:
+            verdict_key = result.verdict if result.verdict in weighted_scores else _normalize_verdict_str(result.verdict)
+            weight = gemini_weight * result.confidence
+            weighted_scores[verdict_key] += weight
+            total_weight += weight
+            confidence_sum += result.confidence * weight
+            confidence_weights += weight
+            logger.info(f"   Gemini: {result.verdict} (weight: {weight:.2f}, conf: {result.confidence:.2f})")
+
         # Weight Grok analysis moderately (real-time social context, but can be influenced by social media bias)
         grok_weight = 2.0
         for result in grok_results:
@@ -1920,6 +2427,8 @@ IMPORTANT:
         source_verdicts = {}
         if openai_results:
             source_verdicts["OpenAI"] = openai_results[0].verdict
+        if gemini_results:
+            source_verdicts["Gemini"] = gemini_results[0].verdict
         if grok_results:
             source_verdicts["Grok"] = grok_results[0].verdict
         if google_results:
@@ -1978,9 +2487,15 @@ IMPORTANT:
                     grok_supports_consensus = any(r.verdict == consensus_verdict for r in grok_results)
                     google_supports_consensus = processed_google.get("consensus_verdict") == consensus_verdict
                     
-                    if openai_supports_consensus or grok_supports_consensus or google_supports_consensus:
+                    gemini_supports_consensus = any(r.verdict == consensus_verdict for r in gemini_results)
+                    if openai_supports_consensus or gemini_supports_consensus or grok_supports_consensus or google_supports_consensus:
                         logger.info(f"🧬 Scientific consensus boost applied for {topic} → {consensus_verdict}")
-                        logger.info(f"   Support - OpenAI: {openai_supports_consensus}, Grok: {grok_supports_consensus}, Google: {google_supports_consensus}")
+                        logger.info(
+                            f"   Support - OpenAI: {openai_supports_consensus}, "
+                            f"Gemini: {gemini_supports_consensus}, "
+                            f"Grok: {grok_supports_consensus}, "
+                            f"Google: {google_supports_consensus}"
+                        )
                         primary_verdict = consensus_verdict
                         final_confidence = min(0.95, final_confidence + 0.1)
                         break
@@ -2008,6 +2523,7 @@ IMPORTANT:
             "details": {
                 "source_count": len(results),
                 "openai_results": len(openai_results),
+                "gemini_results": len(gemini_results),
                 "grok_results": len(grok_results),
                 "google_results": len(google_results),
                 "weighted_scores": weighted_scores,
@@ -2018,11 +2534,17 @@ IMPORTANT:
                 "web_sources_consulted": self._extract_web_sources(all_sources),
                 "source_agreement": source_agreement,
                 "source_verdicts": source_verdicts,
-                "reasoning": f"Weighted analysis [{source_agreement}]: OpenAI ({len(openai_results)}) + Grok ({len(grok_results)}) + Google ({len(google_results)}) = {primary_verdict}{conflict_note}"
+                "reasoning": (
+                    f"Weighted analysis [{source_agreement}]: "
+                    f"OpenAI ({len(openai_results)}) + "
+                    f"Gemini ({len(gemini_results)}) + "
+                    f"Grok ({len(grok_results)}) + "
+                    f"Google ({len(google_results)}) = {primary_verdict}{conflict_note}"
+                )
             }
         }
-    
-    async def _create_unified_explanation(self, claim: str, verdict: str, openai_results: List[FactCheckResult], 
+
+    async def _create_unified_explanation(self, claim: str, verdict: str, openai_results: List[FactCheckResult],
                                          grok_results: List[FactCheckResult], google_summary: Dict[str, Any]) -> str:
         """Create a unified explanation by synthesizing insights from all sources"""
         
@@ -2089,14 +2611,14 @@ EXAMPLE FORMAT:
 Unified Explanation:"""
 
                 payload = {
-                    "model": "gpt-4o",
+                    "model": "gpt-4.1-mini",
                     "messages": [{"role": "user", "content": prompt}],
                     "max_tokens": 300,
                     "temperature": 0.3
                 }
-                
+
                 async with aiohttp.ClientSession() as session:
-                    async with session.post("https://api.openai.com/v1/chat/completions", 
+                    async with session.post("https://api.openai.com/v1/chat/completions",
                                            headers=headers, json=payload, timeout=15) as response:
                         if response.status == 200:
                             data = await response.json()
@@ -2169,7 +2691,7 @@ Respond with ONLY valid JSON:
             
             async with aiohttp.ClientSession(headers=headers) as session:
                 payload = {
-                    "model": "gpt-4o",
+                    "model": "gpt-4.1-mini",
                     "messages": [
                         {"role": "system", "content": "You are an expert at interpreting fact-check context. Respond only with valid JSON."},
                         {"role": "user", "content": prompt}

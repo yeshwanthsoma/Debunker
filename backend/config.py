@@ -18,12 +18,14 @@ class Settings(BaseSettings):
     secret_key: str = Field(default="dev-secret-key")
     
     # API Authentication (regular users - rate limited)
-    api_username: str = Field(default="user")
-    api_password: str = Field(default="user_password_change_in_production")
+    # These MUST be set in the environment — no defaults allowed.
+    api_username: str
+    api_password: str
 
     # Admin Authentication (unlimited access - no rate limits)
-    admin_username: str = Field(default="admin")
-    admin_password: str = Field(default="admin_password_change_in_production")
+    # These MUST be set in the environment — no defaults allowed.
+    admin_username: str
+    admin_password: str
     
     # API Configuration
     api_host: str = Field(default="0.0.0.0")
@@ -41,6 +43,7 @@ class Settings(BaseSettings):
     reddit_secret: Optional[str] = Field(default=None)
     twitter_bearer_token: Optional[str] = Field(default=None)
     grok_api_key: Optional[str] = Field(default=None)
+    gemini_api_key: Optional[str] = Field(default=None)
     
     # OpenAI Configuration
     openai_model: str = Field(default="gpt-4o")
@@ -80,6 +83,22 @@ class Settings(BaseSettings):
     cors_allow_credentials: bool = Field(default=True)
 
     @model_validator(mode='after')
+    def check_credentials_not_placeholder(self) -> 'Settings':
+        """Crash on startup if credentials are unset or still use placeholder values."""
+        PLACEHOLDERS = {
+            "user_password_change_in_production",
+            "admin_password_change_in_production",
+        }
+        for field in ('api_password', 'admin_password'):
+            val = getattr(self, field, None)
+            if not val or val in PLACEHOLDERS:
+                raise ValueError(
+                    f"{field} must be set to a strong secret in the environment — "
+                    "default placeholder values are not permitted."
+                )
+        return self
+
+    @model_validator(mode='after')
     def configure_railway_database(self) -> 'Settings':
         """Normalise DATABASE_URL for Railway / PostgreSQL environments."""
         if self.railway_environment or os.getenv('DATABASE_URL'):
@@ -117,7 +136,8 @@ def get_api_key(service: str) -> Optional[str]:
         "reddit_client_id": settings.reddit_client_id,
         "reddit_secret": settings.reddit_secret,
         "twitter_bearer_token": settings.twitter_bearer_token,
-        "grok": settings.grok_api_key
+        "grok": settings.grok_api_key,
+        "gemini": settings.gemini_api_key
     }
     
     return key_mapping.get(service)

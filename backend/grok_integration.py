@@ -45,7 +45,7 @@ class GrokSocialAnalyzer:
     def __init__(self):
         self.api_key = get_api_key("grok")
         self.base_url = "https://api.x.ai/v1"
-        self.model = "grok-4-1-fast"  # Updated to use new model optimized for tool calling
+        self.model = "grok-4-1-fast-non-reasoning"  # Updated to use new model optimized for tool calling
         self.session = None
     
     async def __aenter__(self):

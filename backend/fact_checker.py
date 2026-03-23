@@ -78,7 +78,7 @@ class EnhancedFactChecker:
         
         # LLM with better configuration
         self.llm = ChatOpenAI(
-            model="gpt-4o",
+            model="gpt-4.1-mini",
             temperature=0.1,
             max_tokens=1000,
             request_timeout=30

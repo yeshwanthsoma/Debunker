@@ -1245,7 +1245,7 @@ Guidelines:
         }
         
         payload = {
-            "model": "gpt-3.5-turbo",
+            "model": "gpt-4.1-mini",
             "messages": [
                 {"role": "system", "content": "You are an expert at generating balanced debate content. Always respond with valid JSON only."},
                 {"role": "user", "content": prompt}
