@@ -327,23 +327,74 @@ class AlternativeFactChecker:
             else:
                 raise Exception(f"Both OpenAI Whisper API and local fallback failed: {e}")
 
-    async def transcribe_audio_sarvam(self, audio_file_path: str) -> str:
-        """Transcribe audio using Sarvam Saaras V3 (supports all 22 Indian languages + codemix)."""
-        import httpx
-        import mimetypes
-        mime_type = mimetypes.guess_type(audio_file_path)[0] or "audio/mpeg"
+    async def _sarvam_chunk(self, chunk_path: str) -> str:
+        """Send a single ≤30s audio chunk to Sarvam with translate mode (returns English)."""
+        import httpx, mimetypes
+        mime_type = mimetypes.guess_type(chunk_path)[0] or "audio/mpeg"
         async with httpx.AsyncClient(timeout=60.0) as client:
-            with open(audio_file_path, 'rb') as f:
+            with open(chunk_path, 'rb') as f:
                 resp = await client.post(
                     "https://api.sarvam.ai/speech-to-text",
                     headers={"api-subscription-key": self.sarvam_key},
-                    data={"model": "saaras:v3", "language_code": "unknown", "with_timestamps": "false"},
-                    files={"file": (os.path.basename(audio_file_path), f, mime_type)},
+                    data={
+                        "model": "saaras:v3",
+                        "language_code": "unknown",
+                        "mode": "translate",
+                        "with_timestamps": "false",
+                    },
+                    files={"file": (os.path.basename(chunk_path), f, mime_type)},
                 )
             if not resp.is_success:
                 logger.error(f"Sarvam API error {resp.status_code}: {resp.text}")
             resp.raise_for_status()
             return resp.json().get("transcript", "")
+
+    async def transcribe_audio_sarvam(self, audio_file_path: str) -> str:
+        """Transcribe + translate to English via Sarvam Saaras V3. Auto-chunks if > 30s."""
+        import subprocess, tempfile, shutil
+
+        loop = asyncio.get_event_loop()
+
+        # Get duration via ffprobe
+        probe = await loop.run_in_executor(None, lambda: subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", audio_file_path],
+            capture_output=True, text=True
+        ))
+        try:
+            duration = float(probe.stdout.strip())
+        except ValueError:
+            duration = 0.0
+
+        if duration <= 30:
+            return await self._sarvam_chunk(audio_file_path)
+
+        # Split into 25s chunks with ffmpeg, process all in parallel
+        chunk_dir = tempfile.mkdtemp(prefix="sarvam_chunks_")
+        chunk_pattern = os.path.join(chunk_dir, "chunk_%03d.mp3")
+        try:
+            await loop.run_in_executor(None, lambda: subprocess.run(
+                ["ffmpeg", "-i", audio_file_path, "-f", "segment",
+                 "-segment_time", "25", "-c", "copy", chunk_pattern, "-y"],
+                capture_output=True
+            ))
+            chunks = sorted(
+                os.path.join(chunk_dir, f) for f in os.listdir(chunk_dir) if f.endswith(".mp3")
+            )
+            if not chunks:
+                raise Exception("ffmpeg produced no audio chunks")
+
+            logger.info(f"Sarvam: {duration:.0f}s audio → {len(chunks)} chunks (parallel)")
+            results = await asyncio.gather(*[self._sarvam_chunk(c) for c in chunks], return_exceptions=True)
+            parts = []
+            for i, r in enumerate(results):
+                if isinstance(r, Exception):
+                    logger.warning(f"Sarvam chunk {i} failed: {r}")
+                elif r.strip():
+                    parts.append(r.strip())
+            return " ".join(parts)
+        finally:
+            shutil.rmtree(chunk_dir, ignore_errors=True)
 
     async def _transcribe_audio(self, audio_file_path: str, metadata=None) -> str:
         """Transcribe audio: Sarvam first (handles Indian + English), Whisper as fallback."""
