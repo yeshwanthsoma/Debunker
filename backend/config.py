@@ -1,5 +1,5 @@
 """
-Configuration management for TruthLens Fact Checker
+Configuration management for Debunker Fact Checker
 """
 
 import os
@@ -44,6 +44,7 @@ class Settings(BaseSettings):
     twitter_bearer_token: Optional[str] = Field(default=None)
     grok_api_key: Optional[str] = Field(default=None)
     gemini_api_key: Optional[str] = Field(default=None)
+    sarvam_api_key: Optional[str] = Field(default=None)
     
     # OpenAI Configuration
     openai_model: str = Field(default="gpt-4o")
@@ -137,7 +138,8 @@ def get_api_key(service: str) -> Optional[str]:
         "reddit_secret": settings.reddit_secret,
         "twitter_bearer_token": settings.twitter_bearer_token,
         "grok": settings.grok_api_key,
-        "gemini": settings.gemini_api_key
+        "gemini": settings.gemini_api_key,
+        "sarvam": settings.sarvam_api_key,
     }
     
     return key_mapping.get(service)

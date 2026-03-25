@@ -1,5 +1,5 @@
 """
-TruthLens - Professional Fact-Checking Backend API
+Debunker - Professional Fact-Checking Backend API
 Enhanced with Google Fact Check Tools API and OpenAI integration
 """
 
@@ -45,10 +45,34 @@ from models import (
 )
 from database import get_db, TrendingClaim, ClaimSource, ClaimAnalytics, init_db, DailyUsage
 from news_aggregator import NewsAggregator, save_claims_to_database
+from url_extractor import is_url, download_audio
 from grok_integration import GrokSocialAnalyzer, enhance_trending_claim_with_grok
 from scheduler import start_background_scheduler, stop_background_scheduler, get_scheduler
 from sqlalchemy.orm import Session
 from sqlalchemy import desc, func
+
+# Indian language detection constants
+INDIAN_SCRIPT_RE = re.compile(
+    r'[\u0900-\u097F'   # Devanagari  (Hindi, Marathi, Sanskrit)
+    r'\u0980-\u09FF'    # Bengali
+    r'\u0A00-\u0A7F'    # Gurmukhi (Punjabi)
+    r'\u0A80-\u0AFF'    # Gujarati
+    r'\u0B00-\u0B7F'    # Odia
+    r'\u0B80-\u0BFF'    # Tamil
+    r'\u0C00-\u0C7F'    # Telugu
+    r'\u0C80-\u0CFF'    # Kannada
+    r'\u0D00-\u0D7F'    # Malayalam
+    r'\u0D80-\u0DFF'    # Sinhala
+    r']'
+)
+# Whisper may return either ISO-639-1 codes or full language names
+INDIAN_LANG_CODES = {
+    # ISO codes
+    "hi", "bn", "te", "ta", "mr", "gu", "kn", "ml", "pa", "ur", "or", "as", "ne", "si", "sd",
+    # Full names returned by Whisper verbose_json
+    "hindi", "bengali", "telugu", "tamil", "marathi", "gujarati", "kannada", "malayalam",
+    "punjabi", "urdu", "odia", "assamese", "nepali", "sinhalese", "sindhi",
+}
 
 # Configure logging
 import uuid
@@ -120,7 +144,7 @@ async def lifespan(app: FastAPI):
     await shutdown_event()
 
 app = FastAPI(
-    title="TruthLens - Professional Fact-Checking API",
+    title="Debunker - Professional Fact-Checking API",
     description="Advanced AI-powered fact-checking with Google Fact Check Tools API, OpenAI integration, and audio analysis",
     version="3.0.1",
     lifespan=lifespan
@@ -206,11 +230,15 @@ class AlternativeFactChecker:
                 logger.warning("⚠️ OpenAI API not available, falling back to local Whisper")
                 # Fallback to local model only if OpenAI is not available
                 self.transcriber = pipeline(
-                    "automatic-speech-recognition", 
+                    "automatic-speech-recognition",
                     model="openai/whisper-tiny",  # Use tiny for faster fallback
                     device=-1
                 )
-            
+
+            self.sarvam_key = get_api_key("sarvam")
+            if self.sarvam_key:
+                logger.info("✅ Sarvam Saaras V3 available for Indian language transcription")
+
             logger.info("✅ Models initialized successfully!")
         except Exception as e:
             logger.error(f"❌ Error initializing models: {e}")
@@ -252,57 +280,99 @@ class AlternativeFactChecker:
         }
         return knowledge_base
     
-    async def transcribe_audio_openai(self, audio_file_path: str) -> str:
-        """Transcribe audio using OpenAI Whisper API with timeout"""
+    async def transcribe_audio_openai(self, audio_file_path: str):
+        """Transcribe audio using OpenAI Whisper API with timeout.
+
+        Returns:
+            tuple[str, str]: (transcript_text, iso_language_code)
+        """
         try:
             logger.info("🗣️ Transcribing audio with OpenAI Whisper API...")
-            
-            # Add timeout for API call using thread executor
+
             def _transcribe():
-                # Read the audio file
                 with open(audio_file_path, 'rb') as audio_file:
-                    # Use the openai client directly
                     import openai
                     client = openai.OpenAI(api_key=self.openai_key, timeout=30.0)
-                    
-                    # Call Whisper API
-                    transcript = client.audio.transcriptions.create(
+                    result = client.audio.transcriptions.create(
                         model="whisper-1",
                         file=audio_file,
-                        response_format="text"
+                        response_format="verbose_json"
                     )
-                    
-                    return transcript.strip()
-            
-            # Run in thread executor with timeout
+                    return result.text.strip(), (result.language or "")
+
             import concurrent.futures
             loop = asyncio.get_event_loop()
             with concurrent.futures.ThreadPoolExecutor() as executor:
-                transcript = await asyncio.wait_for(
-                    loop.run_in_executor(executor, _transcribe), 
+                transcript, lang = await asyncio.wait_for(
+                    loop.run_in_executor(executor, _transcribe),
                     timeout=60.0
                 )
-            logger.info(f"✅ OpenAI Whisper API transcription completed")
-            return transcript
-                
+            logger.info(f"✅ OpenAI Whisper API transcription completed (lang={lang!r})")
+            return transcript, lang
+
         except asyncio.TimeoutError:
             logger.error("❌ OpenAI Whisper API timeout (60 seconds)")
-            # Fallback to local transcription if API times out
             if hasattr(self, 'transcriber'):
                 logger.info("🔄 Falling back to local Whisper model due to timeout...")
                 result = self.transcriber(audio_file_path, return_timestamps=True)
-                return result['text']
+                return result['text'], ""
             else:
                 raise Exception("OpenAI Whisper API timeout and no local fallback available")
         except Exception as e:
             logger.error(f"❌ OpenAI Whisper API error: {e}")
-            # Fallback to local transcription if API fails
             if hasattr(self, 'transcriber'):
                 logger.info("🔄 Falling back to local Whisper model...")
                 result = self.transcriber(audio_file_path, return_timestamps=True)
-                return result['text']
+                return result['text'], ""
             else:
                 raise Exception(f"Both OpenAI Whisper API and local fallback failed: {e}")
+
+    async def transcribe_audio_sarvam(self, audio_file_path: str) -> str:
+        """Transcribe audio using Sarvam Saaras V3 (supports all 22 Indian languages + codemix)."""
+        import httpx
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            with open(audio_file_path, 'rb') as f:
+                resp = await client.post(
+                    "https://api.sarvam.ai/speech-to-text",
+                    headers={"api-subscription-key": self.sarvam_key},
+                    data={"model": "saaras:v3", "language_code": "unknown", "with_timestamps": "false"},
+                    files={"file": (os.path.basename(audio_file_path), f, "audio/mpeg")},
+                )
+            resp.raise_for_status()
+            return resp.json().get("transcript", "")
+
+    async def _transcribe_audio(self, audio_file_path: str, metadata=None) -> str:
+        """Dispatcher: detect Indian language and route to Sarvam or OpenAI Whisper."""
+        is_indian = False
+
+        # Method 1: check URL metadata (title + description) for Indian Unicode scripts
+        if metadata:
+            text = (metadata.get("title", "") + " " + metadata.get("description", ""))
+            is_indian = bool(INDIAN_SCRIPT_RE.search(text))
+
+        if is_indian and self.sarvam_key:
+            try:
+                result = await self.transcribe_audio_sarvam(audio_file_path)
+                if result.strip():
+                    logger.info("🇮🇳 Sarvam Saaras V3 transcription used")
+                    return result
+            except Exception as e:
+                logger.warning(f"Sarvam failed ({e}), falling back to OpenAI Whisper")
+
+        if self.use_openai_whisper:
+            transcript, lang = await self.transcribe_audio_openai(audio_file_path)
+            # Method 2: Whisper detected an Indian language (audio-upload route, no metadata)
+            if not is_indian and lang in INDIAN_LANG_CODES and self.sarvam_key:
+                logger.info(f"🇮🇳 Indian language detected by Whisper ({lang}), re-transcribing with Sarvam...")
+                try:
+                    result = await self.transcribe_audio_sarvam(audio_file_path)
+                    if result.strip():
+                        return result
+                except Exception as e:
+                    logger.warning(f"Sarvam failed ({e}), using Whisper result")
+            return transcript
+
+        return self.transcribe_audio_local(audio_file_path)
     
     def transcribe_audio_local(self, audio_file_path: str) -> str:
         """Transcribe audio using local Whisper model"""
@@ -474,7 +544,7 @@ class AlternativeFactChecker:
 async def startup_event():
     """Initialize the fact checker on startup"""
     global fact_checker, multi_source_checker
-    logger.info("🚀 Starting TruthLens Professional Fact-Checking System...")
+    logger.info("🚀 Starting Debunker Professional Fact-Checking System...")
     logger.info("=" * 60)
     
     # Check API availability first
@@ -563,7 +633,7 @@ async def startup_event():
             # Continue without scheduler
         
         logger.info("=" * 60)
-        logger.info("🎉 TruthLens startup complete!")
+        logger.info("🎉 Debunker startup complete!")
         
     except Exception as e:
         logger.error(f"❌ Failed to initialize fact checker: {e}")
@@ -591,7 +661,7 @@ async def shutdown_event():
 async def root():
     """Root endpoint"""
     return {
-        "message": "TruthLens - Professional Fact-Checking API",
+        "message": "Debunker - Professional Fact-Checking API",
         "version": "3.0.0",
         "status": "running",
         "features": {
@@ -698,23 +768,37 @@ async def _analyze_claim_internal(analysis_request: AnalysisRequest) -> Analysis
     stage_times = {"start": start_time}
     
     try:
-        # Stage 1: Audio Processing
+        # Stage 0: URL Detection — download audio from social media links
+        url_metadata = None
         audio_file = None
         transcription = ""
         prosody_features = {}
-        
+
+        if analysis_request.text_claim and is_url(analysis_request.text_claim.strip()):
+            logger.info(f"🔗 [{request_id}] URL detected — downloading audio from reel/video...")
+            try:
+                audio_file, url_metadata = await download_audio(analysis_request.text_claim.strip())
+                logger.info(f"   Downloaded audio from {url_metadata['platform']}: {url_metadata['title'][:80]}")
+                # Transcribe — route to Sarvam for Indian languages (Method 1: metadata check)
+                transcription = await fact_checker._transcribe_audio(audio_file, metadata=url_metadata)
+                stage_times["transcription_done"] = time.time()
+                logger.info(f"   Transcription ({len(transcription)} chars): '{transcription[:100]}{'...' if len(transcription) > 100 else ''}'")
+            except Exception as e:
+                logger.warning(f"   URL audio extraction failed: {e} — falling back to URL as text claim")
+                url_metadata = None
+                audio_file = None
+                transcription = ""
+
+        # Stage 1: Audio Processing
         if analysis_request.audio_data:
             logger.info(f"🎤 [{request_id}] STAGE 1: Processing audio data...")
             audio_file = await process_audio_data(analysis_request.audio_data)
             stage_times["audio_processed"] = time.time()
             logger.debug(f"   Audio file saved: {audio_file}")
             
-            # Transcribe
+            # Transcribe — route to Sarvam for Indian languages (Method 2: Whisper lang detection)
             logger.info(f"🗣️ [{request_id}] STAGE 2: Transcribing audio...")
-            if fact_checker.use_openai_whisper:
-                transcription = await fact_checker.transcribe_audio_openai(audio_file)
-            else:
-                transcription = fact_checker.transcribe_audio_local(audio_file)
+            transcription = await fact_checker._transcribe_audio(audio_file)
             stage_times["transcription_done"] = time.time()
             logger.info(f"   Transcription: '{transcription[:100]}{'...' if len(transcription) > 100 else ''}'")
             
@@ -725,12 +809,21 @@ async def _analyze_claim_internal(analysis_request: AnalysisRequest) -> Analysis
                 stage_times["prosody_done"] = time.time()
                 logger.debug(f"   Prosody features: {prosody_features}")
                 logger.info(f"   Sarcasm probability: {prosody_features.get('sarcasm_probability', 0):.2%}")
-        else:
+        elif not url_metadata:
             logger.info(f"📝 [{request_id}] No audio data provided, using text claim only")
         
         # Stage 4: Claim Extraction
         claim = analysis_request.text_claim.strip()
-        if not claim and transcription:
+        if url_metadata:
+            # URL was provided — build claim from transcription + caption
+            parts = []
+            if transcription.strip():
+                parts.append(transcription.strip())
+            if url_metadata.get('description'):
+                parts.append(f"Caption: {url_metadata['description'][:500]}")
+            claim = "\n\n".join(parts)
+            logger.info(f"📋 [{request_id}] Using transcription from URL ({url_metadata['platform']}) — transcript={'yes' if transcription.strip() else 'empty'}, caption={'yes' if url_metadata.get('description') else 'no'}")
+        elif not claim and transcription:
             claim = transcription.strip()
             logger.info(f"📋 [{request_id}] Using transcribed claim")
         
@@ -1333,7 +1426,7 @@ async def get_stats():
 async def get_api_documentation():
     """Get comprehensive API documentation"""
     return {
-        "title": "TruthLens Professional Fact-Checking API",
+        "title": "Debunker Professional Fact-Checking API",
         "version": "3.0.1-enhanced",
         "description": "Advanced AI-powered fact-checking with Google Fact Check Tools API, OpenAI integration, and audio analysis",
         "base_url": "http://localhost:8080",
