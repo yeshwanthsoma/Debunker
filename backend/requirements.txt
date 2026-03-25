@@ -32,7 +32,6 @@ openai==1.97.0
 aiohttp==3.12.14
 requests==2.32.4
 httpx==0.28.1  # For async HTTP requests (needed for Grok and Claude judge)
-google-generativeai>=0.8.0  # For Gemini 2.5 Flash integration
 
 # Configuration and Environment
 python-dotenv==1.1.1
@@ -44,6 +43,7 @@ psycopg2-binary==2.9.9  # PostgreSQL adapter for Railway deployment
 # News and Social Media APIs
 newsapi-python==0.2.7
 praw==7.7.1  # Reddit API
+yt-dlp>=2024.1.1  # Audio extraction from social media URLs (Instagram, TikTok, YouTube, etc.)
 
 # Background Tasks and Scheduling
 apscheduler==3.10.4
