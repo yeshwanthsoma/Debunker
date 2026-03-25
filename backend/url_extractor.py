@@ -8,11 +8,23 @@ import asyncio
 import tempfile
 import os
 import shutil
+import base64
 
 URL_PATTERN = re.compile(r'^https?://\S+$', re.IGNORECASE)
 
 # Maximum video duration allowed for fact-checking (4 minutes)
 MAX_DURATION_SECONDS = 240
+
+
+def _write_cookies_file() -> str | None:
+    """Decode INSTAGRAM_COOKIES_B64 env var to a temp file. Returns path or None."""
+    b64 = os.getenv("INSTAGRAM_COOKIES_B64")
+    if not b64:
+        return None
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".txt", prefix="ig_cookies_")
+    tmp.write(base64.b64decode(b64))
+    tmp.close()
+    return tmp.name
 
 
 def is_url(text: str) -> bool:
@@ -34,52 +46,61 @@ async def download_audio(url: str) -> tuple:
     import yt_dlp
 
     loop = asyncio.get_event_loop()
-
-    # Step 1: fetch metadata only (no download) to check duration
-    def _get_info():
-        with yt_dlp.YoutubeDL({'quiet': True, 'no_warnings': True, 'socket_timeout': 15}) as ydl:
-            return ydl.extract_info(url, download=False)
-
-    info = await loop.run_in_executor(None, _get_info)
-
-    duration = info.get('duration')  # seconds, may be None for live streams
-    if duration and duration > MAX_DURATION_SECONDS:
-        minutes = duration // 60
-        seconds = duration % 60
-        raise ValueError(
-            f"Video is too long ({minutes}m {seconds}s). "
-            f"De-Bunker only fact-checks videos up to {MAX_DURATION_SECONDS // 60} minutes long. "
-            "Please share a shorter clip."
-        )
-
-    # Step 2: download audio
-    tmp_dir = tempfile.mkdtemp(prefix='debunker_url_')
-    output_template = os.path.join(tmp_dir, 'audio.%(ext)s')
-
-    ydl_opts = {
-        'quiet': True,
-        'no_warnings': True,
-        # bestaudio preferred; fall back to best video+audio (TikTok has no separate audio stream)
-        'format': 'bestaudio/best',
-        'outtmpl': output_template,
-        'socket_timeout': 30,
-        'extract_flat': False,
-        'postprocessors': [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'mp3',
-            'preferredquality': '64',
-        }],
-    }
-
-    def _download():
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            return ydl.extract_info(url, download=True)
+    cookies_file = _write_cookies_file()
 
     try:
-        info = await loop.run_in_executor(None, _download)
-    except Exception:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
-        raise
+        # Step 1: fetch metadata only (no download) to check duration
+        def _get_info():
+            opts = {'quiet': True, 'no_warnings': True, 'socket_timeout': 15}
+            if cookies_file:
+                opts['cookiefile'] = cookies_file
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                return ydl.extract_info(url, download=False)
+
+        info = await loop.run_in_executor(None, _get_info)
+
+        duration = info.get('duration')  # seconds, may be None for live streams
+        if duration and duration > MAX_DURATION_SECONDS:
+            minutes = duration // 60
+            seconds = duration % 60
+            raise ValueError(
+                f"Video is too long ({minutes}m {seconds}s). "
+                f"De-Bunker only fact-checks videos up to {MAX_DURATION_SECONDS // 60} minutes long. "
+                "Please share a shorter clip."
+            )
+
+        # Step 2: download audio
+        tmp_dir = tempfile.mkdtemp(prefix='debunker_url_')
+        output_template = os.path.join(tmp_dir, 'audio.%(ext)s')
+
+        ydl_opts = {
+            'quiet': True,
+            'no_warnings': True,
+            'format': 'bestaudio/best',
+            'outtmpl': output_template,
+            'socket_timeout': 30,
+            'extract_flat': False,
+            'postprocessors': [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+                'preferredquality': '64',
+            }],
+        }
+        if cookies_file:
+            ydl_opts['cookiefile'] = cookies_file
+
+        def _download():
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                return ydl.extract_info(url, download=True)
+
+        try:
+            info = await loop.run_in_executor(None, _download)
+        except Exception:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            raise
+    finally:
+        if cookies_file:
+            os.unlink(cookies_file)
 
     # Find the downloaded file
     audio_file = os.path.join(tmp_dir, 'audio.mp3')
