@@ -59,7 +59,7 @@ class NewsAggregator:
                 self.reddit_client = praw.Reddit(
                     client_id=reddit_client_id,
                     client_secret=reddit_secret,
-                    user_agent="TruthLens Fact Checker v1.0"
+                    user_agent="Debunker Fact Checker v1.0"
                 )
                 logger.info("✅ Reddit client initialized")
             else:

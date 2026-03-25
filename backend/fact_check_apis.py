@@ -1,5 +1,5 @@
 """
-Professional Fact-Checking API Integrations for TruthLens
+Professional Fact-Checking API Integrations for Debunker
 """
 
 import aiohttp

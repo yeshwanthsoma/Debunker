@@ -1,5 +1,5 @@
 """
-Authentication module for TruthLens API
+Authentication module for Debunker API
 Provides HTTP Basic Authentication with two levels:
 - Regular auth: rate limited access
 - Admin auth: unlimited access, no rate limits
@@ -64,7 +64,7 @@ def verify_credentials(credentials: HTTPBasicCredentials = Depends(security)) ->
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid authentication credentials",
-            headers={"WWW-Authenticate": "Basic"},
+            headers={"WWW-Authenticate": "x-basic"},
         )
 
     return True
@@ -86,7 +86,7 @@ def verify_admin(credentials: HTTPBasicCredentials = Depends(security)) -> bool:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid authentication credentials",
-            headers={"WWW-Authenticate": "Basic"},
+            headers={"WWW-Authenticate": "x-basic"},
         )
 
     if not is_admin:
@@ -114,7 +114,7 @@ def get_user_type(credentials: HTTPBasicCredentials = Depends(security)) -> str:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid authentication credentials",
-            headers={"WWW-Authenticate": "Basic"},
+            headers={"WWW-Authenticate": "x-basic"},
         )
 
     return "admin" if is_admin else "user"
