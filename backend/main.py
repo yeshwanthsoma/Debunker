@@ -45,7 +45,7 @@ from models import (
 )
 from database import get_db, TrendingClaim, ClaimSource, ClaimAnalytics, init_db, DailyUsage
 from news_aggregator import NewsAggregator, save_claims_to_database
-from url_extractor import is_url, download_audio
+from url_extractor import is_url, download_audio, cleanup_download
 from grok_integration import GrokSocialAnalyzer, enhance_trending_claim_with_grok
 from scheduler import start_background_scheduler, stop_background_scheduler, get_scheduler
 from sqlalchemy.orm import Session
@@ -783,8 +783,14 @@ async def _analyze_claim_internal(analysis_request: AnalysisRequest) -> Analysis
                 transcription = await fact_checker._transcribe_audio(audio_file, metadata=url_metadata)
                 stage_times["transcription_done"] = time.time()
                 logger.info(f"   Transcription ({len(transcription)} chars): '{transcription[:100]}{'...' if len(transcription) > 100 else ''}'")
+                cleanup_download(url_metadata)
+            except ValueError as e:
+                # Video too long or other validation error — return immediately, don't fall back
+                raise HTTPException(status_code=400, detail=str(e))
             except Exception as e:
                 logger.warning(f"   URL audio extraction failed: {e} — falling back to URL as text claim")
+                if url_metadata:
+                    cleanup_download(url_metadata)
                 url_metadata = None
                 audio_file = None
                 transcription = ""

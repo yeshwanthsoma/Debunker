@@ -253,7 +253,7 @@ Respond with JSON array: ["claim1", "claim2"]"""
                     # Extract sources
                     sources = [{
                         "name": publisher.get("name", "Unknown"),
-                        "url": review.get("url", ""),
+                        "url": _clean_url(review.get("url", "")),
                         "date": review.get("reviewDate", ""),
                         "title": review.get("title", "")
                     }]
@@ -894,7 +894,7 @@ URL EXAMPLES:
                         sources.append({
                             "name": source,
                             "type": "Web Source",
-                            "url": source if source.startswith("http") else None
+                            "url": _clean_url(source) if source.startswith("http") else None
                         })
             
             # Add standard AI analysis source
@@ -1584,7 +1584,7 @@ CRITICAL REQUIREMENTS:
                 if isinstance(citation, dict):
                     citation_obj = {
                         "name": citation.get("title", "Agent Tools Result"),
-                        "url": citation.get("url", ""),
+                        "url": _clean_url(citation.get("url", "")),
                         "type": "agent_tools_citation",
                         "title": citation.get("title", ""),
                         "snippet": citation.get("snippet", "")
@@ -1659,7 +1659,7 @@ CRITICAL REQUIREMENTS:
                 if isinstance(citation, dict):
                     sources.append({
                         "name": citation.get("title", "Agent Tools Result") if isinstance(citation.get("title"), str) else "Agent Tools Result",
-                        "url": citation.get("url", "") if isinstance(citation.get("url"), str) else "",
+                        "url": _clean_url(citation.get("url", "")) if isinstance(citation.get("url"), str) else "",
                         "type": "agent_tools_citation",
                         "title": citation.get("title", "") if isinstance(citation.get("title"), str) else "",
                         "snippet": citation.get("snippet", "") if isinstance(citation.get("snippet"), str) else ""
