@@ -330,46 +330,37 @@ class AlternativeFactChecker:
     async def transcribe_audio_sarvam(self, audio_file_path: str) -> str:
         """Transcribe audio using Sarvam Saaras V3 (supports all 22 Indian languages + codemix)."""
         import httpx
+        import mimetypes
+        mime_type = mimetypes.guess_type(audio_file_path)[0] or "audio/mpeg"
         async with httpx.AsyncClient(timeout=60.0) as client:
             with open(audio_file_path, 'rb') as f:
                 resp = await client.post(
                     "https://api.sarvam.ai/speech-to-text",
                     headers={"api-subscription-key": self.sarvam_key},
                     data={"model": "saaras:v3", "language_code": "unknown", "with_timestamps": "false"},
-                    files={"file": (os.path.basename(audio_file_path), f, "audio/mpeg")},
+                    files={"file": (os.path.basename(audio_file_path), f, mime_type)},
                 )
+            if not resp.is_success:
+                logger.error(f"Sarvam API error {resp.status_code}: {resp.text}")
             resp.raise_for_status()
             return resp.json().get("transcript", "")
 
     async def _transcribe_audio(self, audio_file_path: str, metadata=None) -> str:
-        """Dispatcher: detect Indian language and route to Sarvam or OpenAI Whisper."""
-        is_indian = False
-
-        # Method 1: check URL metadata (title + description) for Indian Unicode scripts
-        if metadata:
-            text = (metadata.get("title", "") + " " + metadata.get("description", ""))
-            is_indian = bool(INDIAN_SCRIPT_RE.search(text))
-
-        if is_indian and self.sarvam_key:
+        """Transcribe audio: Sarvam first (handles Indian + English), Whisper as fallback."""
+        # Try Sarvam first if available — handles all 22 Indian languages + English
+        if self.sarvam_key:
             try:
                 result = await self.transcribe_audio_sarvam(audio_file_path)
                 if result.strip():
-                    logger.info("🇮🇳 Sarvam Saaras V3 transcription used")
+                    logger.info("✅ Sarvam Saaras V3 transcription used")
                     return result
+                logger.warning("Sarvam returned empty transcript, falling back to Whisper")
             except Exception as e:
-                logger.warning(f"Sarvam failed ({e}), falling back to OpenAI Whisper")
+                logger.warning(f"Sarvam failed ({e}), falling back to Whisper")
 
+        # Fallback: OpenAI Whisper
         if self.use_openai_whisper:
-            transcript, lang = await self.transcribe_audio_openai(audio_file_path)
-            # Method 2: Whisper detected an Indian language (audio-upload route, no metadata)
-            if not is_indian and lang in INDIAN_LANG_CODES and self.sarvam_key:
-                logger.info(f"🇮🇳 Indian language detected by Whisper ({lang}), re-transcribing with Sarvam...")
-                try:
-                    result = await self.transcribe_audio_sarvam(audio_file_path)
-                    if result.strip():
-                        return result
-                except Exception as e:
-                    logger.warning(f"Sarvam failed ({e}), using Whisper result")
+            transcript, _ = await self.transcribe_audio_openai(audio_file_path)
             return transcript
 
         return self.transcribe_audio_local(audio_file_path)
