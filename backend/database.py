@@ -36,6 +36,7 @@ class DailyUsage(Base):
     device_id = Column(String(36), nullable=False, index=True)   # UUID from debunker_id cookie
     date = Column(String(10), nullable=False, index=True)        # YYYY-MM-DD UTC
     count = Column(Integer, default=0, nullable=False)
+    cooldown_until = Column(DateTime, nullable=True)             # Block until this UTC time after limit hit
 
     __table_args__ = (
         UniqueConstraint('device_id', 'date', name='uq_daily_usage_device_date'),
@@ -190,6 +191,16 @@ def create_tables():
 def init_db():
     """Initialize database with default data"""
     create_tables()
+
+    # Migration: add cooldown_until column if it doesn't exist yet (SQLite doesn't support IF NOT EXISTS on columns)
+    try:
+        with engine.connect() as conn:
+            conn.execute(__import__('sqlalchemy').text(
+                "ALTER TABLE daily_usage ADD COLUMN cooldown_until DATETIME"
+            ))
+            conn.commit()
+    except Exception:
+        pass  # Column already exists
     
     # Add default news sources
     db = SessionLocal()

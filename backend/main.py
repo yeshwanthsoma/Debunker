@@ -698,17 +698,17 @@ def get_client_ip(request: Request) -> str:
         return forwarded_for.split(",")[0].strip()
     return request.client.host
 
-# Daily limit for regular users (admin users are unlimited)
-DAILY_USER_LIMIT = 3
+# Quota: 3 checks per 10-minute cooldown window for regular users
+RATE_LIMIT_COUNT = 3
+COOLDOWN_MINUTES = 10
 
 
 def _check_and_update_quota(request: Request, response: Response, db: Session) -> None:
-    """Check and update daily quota for regular users. Admin users bypass this."""
+    """Check and update quota for regular users. Hitting the limit triggers a 10-min cooldown."""
     if is_admin_request(request):
         return  # Admin bypasses quota
 
     # Derive quota key from verified Basic Auth username — not client-supplied headers.
-    # X-Device-ID and cookies are attacker-controlled and must not drive quota enforcement.
     auth_header = request.headers.get("Authorization", "")
     quota_key = None
     if auth_header.startswith("Basic "):
@@ -722,18 +722,41 @@ def _check_and_update_quota(request: Request, response: Response, db: Session) -
     if not quota_key:
         raise HTTPException(status_code=401, detail="Authentication required for quota tracking")
 
-    today = datetime.utcnow().strftime("%Y-%m-%d")
+    now = datetime.utcnow()
+    today = now.strftime("%Y-%m-%d")
     usage = db.query(DailyUsage).filter(
         DailyUsage.device_id == quota_key, DailyUsage.date == today
     ).first()
     if usage is None:
         usage = DailyUsage(device_id=quota_key, date=today, count=0)
         db.add(usage)
-    if usage.count >= DAILY_USER_LIMIT:
+
+    # Check active cooldown
+    if usage.cooldown_until and usage.cooldown_until > now:
+        remaining_secs = int((usage.cooldown_until - now).total_seconds())
+        remaining_mins = remaining_secs // 60
+        remaining_secs_part = remaining_secs % 60
+        wait_str = f"{remaining_mins}m {remaining_secs_part}s" if remaining_mins else f"{remaining_secs_part}s"
         raise HTTPException(
             status_code=429,
-            detail="You've used your 3 free checks for today. Come back tomorrow or upgrade to admin access!"
+            detail=f"Rate limit reached. Try again in {wait_str}."
         )
+
+    # Cooldown expired — reset counter
+    if usage.cooldown_until and usage.cooldown_until <= now:
+        usage.count = 0
+        usage.cooldown_until = None
+
+    # Hit the limit — start cooldown and reset count for the next window
+    if usage.count >= RATE_LIMIT_COUNT:
+        usage.cooldown_until = now + timedelta(minutes=COOLDOWN_MINUTES)
+        usage.count = 0
+        db.commit()
+        raise HTTPException(
+            status_code=429,
+            detail=f"Rate limit reached. Try again in {COOLDOWN_MINUTES} minutes."
+        )
+
     usage.count += 1
     db.commit()
 
