@@ -192,12 +192,20 @@ def init_db():
     """Initialize database with default data"""
     create_tables()
 
-    # Migration: add cooldown_until column if it doesn't exist yet (SQLite doesn't support IF NOT EXISTS on columns)
+    # Migration: add cooldown_until column if it doesn't exist yet
     try:
         with engine.connect() as conn:
-            conn.execute(__import__('sqlalchemy').text(
-                "ALTER TABLE daily_usage ADD COLUMN cooldown_until DATETIME"
-            ))
+            dialect = engine.dialect.name
+            if dialect == "postgresql":
+                # PostgreSQL supports IF NOT EXISTS natively
+                conn.execute(__import__('sqlalchemy').text(
+                    "ALTER TABLE daily_usage ADD COLUMN IF NOT EXISTS cooldown_until TIMESTAMP"
+                ))
+            else:
+                # SQLite: no IF NOT EXISTS for columns — swallow duplicate error
+                conn.execute(__import__('sqlalchemy').text(
+                    "ALTER TABLE daily_usage ADD COLUMN cooldown_until DATETIME"
+                ))
             conn.commit()
     except Exception:
         pass  # Column already exists
