@@ -33,7 +33,7 @@ class DailyUsage(Base):
     __tablename__ = "daily_usage"
 
     id = Column(Integer, primary_key=True, index=True)
-    device_id = Column(String(36), nullable=False, index=True)   # UUID from debunker_id cookie
+    device_id = Column(String(64), nullable=False, index=True)   # device:{uuid} key
     date = Column(String(10), nullable=False, index=True)        # YYYY-MM-DD UTC
     count = Column(Integer, default=0, nullable=False)
     cooldown_until = Column(DateTime, nullable=True)             # Block until this UTC time after limit hit
@@ -191,6 +191,17 @@ def create_tables():
 def init_db():
     """Initialize database with default data"""
     create_tables()
+
+    # Migration: widen device_id column from VARCHAR(36) to VARCHAR(64)
+    try:
+        with engine.connect() as conn:
+            if engine.dialect.name == "postgresql":
+                conn.execute(__import__('sqlalchemy').text(
+                    "ALTER TABLE daily_usage ALTER COLUMN device_id TYPE VARCHAR(64)"
+                ))
+                conn.commit()
+    except Exception:
+        pass  # Already wide enough
 
     # Migration: add cooldown_until column if it doesn't exist yet
     try:
