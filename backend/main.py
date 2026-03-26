@@ -120,7 +120,8 @@ if redis_url:
             limiter = Limiter(
                 key_func=get_rate_limit_key,
                 storage_uri=redis_url,
-                default_limits=["100 per day", "30 per hour"]
+                default_limits=["100 per day", "30 per hour"],
+                exempt_when=is_admin_request,
             )
         else:
             logger.warning("⚠️ redis package not installed - falling back to in-memory storage")
@@ -131,7 +132,8 @@ if limiter is None:
     logger.info("📝 Rate limiter using in-memory storage")
     limiter = Limiter(
         key_func=get_rate_limit_key,
-        default_limits=["100 per day", "30 per hour"]
+        default_limits=["100 per day", "30 per hour"],
+        exempt_when=is_admin_request,
     )
 
 # Initialize FastAPI app with lifespan
