@@ -95,16 +95,10 @@ request_counter = 0
 import base64 as _base64
 
 def get_rate_limit_key(request: Request) -> str:
-    """Use authenticated username as rate limit key to prevent IP-spoofing bypass."""
-    auth_header = request.headers.get("Authorization", "")
-    if auth_header.startswith("Basic "):
-        try:
-            credentials = _base64.b64decode(auth_header[6:]).decode("utf-8")
-            username, _ = credentials.split(":", 1)
-            return f"user:{username}"
-        except Exception:
-            pass
-    # Unauthenticated: use direct connection IP only (no proxy header trust)
+    """Per-device rate limit key using X-Device-ID header (unique UUID per browser)."""
+    device_id = request.headers.get("X-Device-ID", "").strip()
+    if device_id:
+        return f"device:{device_id}"
     return request.client.host if request.client else "unknown"
 
 # Initialize rate limiter with Redis backend if available
@@ -752,16 +746,9 @@ def _check_and_update_quota(request: Request, response: Response, db: Session) -
     if is_admin_request(request):
         return  # Admin bypasses quota
 
-    # Derive quota key from verified Basic Auth username — not client-supplied headers.
-    auth_header = request.headers.get("Authorization", "")
-    quota_key = None
-    if auth_header.startswith("Basic "):
-        try:
-            credentials = _base64.b64decode(auth_header[6:]).decode("utf-8")
-            username, _ = credentials.split(":", 1)
-            quota_key = f"user:{username}"
-        except Exception:
-            pass
+    # Key by device ID (unique UUID per browser, sent by frontend as X-Device-ID header)
+    device_id = request.headers.get("X-Device-ID", "").strip()
+    quota_key = f"device:{device_id}" if device_id else None
 
     if not quota_key:
         raise HTTPException(status_code=401, detail="Authentication required for quota tracking")
