@@ -95,7 +95,10 @@ request_counter = 0
 import base64 as _base64
 
 def get_rate_limit_key(request: Request) -> str:
-    """Per-device rate limit key using X-Device-ID header (unique UUID per browser)."""
+    """Per-device rate limit key. Admin gets a unique key per request (never accumulates)."""
+    if is_admin_request(request):
+        import uuid
+        return f"admin_exempt_{uuid.uuid4()}"
     device_id = request.headers.get("X-Device-ID", "").strip()
     if device_id:
         return f"device:{device_id}"
@@ -115,7 +118,6 @@ if redis_url:
                 key_func=get_rate_limit_key,
                 storage_uri=redis_url,
                 default_limits=["100 per day", "30 per hour"],
-                exempt_when=is_admin_request,
             )
         else:
             logger.warning("⚠️ redis package not installed - falling back to in-memory storage")
