@@ -1263,8 +1263,12 @@ async def _analyze_claim_internal(analysis_request: AnalysisRequest) -> Analysis
         if details and isinstance(details, dict):
             source_agreement_val = details.get('source_agreement')
 
+        # For URL requests, expose full extracted content (caption + OCR cards + audio)
+        # in the transcription field so the frontend shows everything that was analysed.
+        display_transcription = claim if (url_metadata or url_card_texts) else transcription
+
         result = AnalysisResponse(
-            transcription=transcription,
+            transcription=display_transcription,
             claim=claim,
             verdict=verdict_val,
             confidence=float(confidence_val) if confidence_val != 'Unknown' else 0.0,
