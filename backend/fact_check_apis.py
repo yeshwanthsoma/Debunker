@@ -15,13 +15,14 @@ from config import get_api_key, is_api_available
 logger = logging.getLogger(__name__)
 
 def _clean_url(url: str) -> str:
-    """Strip trailing quotes (literal and URL-encoded) and punctuation from URLs."""
+    """Strip surrounding/trailing quotes and punctuation from LLM-generated URLs."""
     url = url.strip()
     # Remove URL-encoded quotes (%22 = ", %27 = ')
     while url.endswith('%22') or url.endswith('%27'):
         url = url[:-3]
-    # Remove literal quotes and trailing punctuation
-    url = url.strip('"\'').rstrip('.,;')
+    # Remove straight and curly quotes, markdown/HTML tail chars, punctuation
+    url = url.strip('"\'\u201c\u201d\u2018\u2019')  # straight + curly quotes
+    url = url.rstrip(')>].,;')                        # markdown links, HTML, punctuation
     return url
 
 def _normalize_verdict_str(rating: str) -> str:
@@ -894,7 +895,7 @@ URL EXAMPLES:
                         sources.append({
                             "name": source,
                             "type": "Web Source",
-                            "url": _clean_url(source) if source.startswith("http") else None
+                            "url": _clean_url(source) if _clean_url(source).startswith("http") else None
                         })
             
             # Add standard AI analysis source

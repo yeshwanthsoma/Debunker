@@ -25,6 +25,7 @@ import time
 import hashlib
 import tempfile
 import os
+import shutil
 import json
 import numpy as np
 import librosa
@@ -45,7 +46,7 @@ from models import (
 )
 from database import get_db, TrendingClaim, ClaimSource, ClaimAnalytics, init_db, DailyUsage
 from news_aggregator import NewsAggregator, save_claims_to_database
-from url_extractor import is_url, download_audio, cleanup_download
+from url_extractor import is_url, download_audio, cleanup_download, extract_instagram_images, is_speech_audio
 from grok_integration import GrokSocialAnalyzer, enhance_trending_claim_with_grok
 from scheduler import start_background_scheduler, stop_background_scheduler, get_scheduler
 from sqlalchemy.orm import Session
@@ -129,7 +130,6 @@ if limiter is None:
     limiter = Limiter(
         key_func=get_rate_limit_key,
         default_limits=["100 per day", "30 per hour"],
-        exempt_when=is_admin_request,
     )
 
 # Initialize FastAPI app with lifespan
@@ -236,6 +236,10 @@ class AlternativeFactChecker:
             self.sarvam_key = get_api_key("sarvam")
             if self.sarvam_key:
                 logger.info("✅ Sarvam Saaras V3 available for Indian language transcription")
+
+            self.anthropic_key = get_api_key("anthropic")
+            if self.anthropic_key:
+                logger.info("✅ Claude Vision available for image OCR")
 
             logger.info("✅ Models initialized successfully!")
         except Exception as e:
@@ -414,6 +418,50 @@ class AlternativeFactChecker:
 
         return self.transcribe_audio_local(audio_file_path)
     
+    async def _ocr_image(self, image_path: str) -> str:
+        """Extract visible text from an image using Claude Vision API."""
+        if not self.anthropic_key:
+            logger.warning("   Claude Vision unavailable — no ANTHROPIC_API_KEY")
+            return ""
+        try:
+            import anthropic
+            import base64 as _b64
+
+            ext = os.path.splitext(image_path)[1].lower().lstrip('.')
+            media_type = {'jpg': 'image/jpeg', 'jpeg': 'image/jpeg', 'png': 'image/png',
+                          'webp': 'image/webp', 'gif': 'image/gif'}.get(ext, 'image/jpeg')
+
+            with open(image_path, 'rb') as f:
+                image_data = _b64.standard_b64encode(f.read()).decode('utf-8')
+
+            client = anthropic.AsyncAnthropic(api_key=self.anthropic_key)
+            response = await client.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=1024,
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {"type": "base64", "media_type": media_type, "data": image_data}
+                        },
+                        {
+                            "type": "text",
+                            "text": (
+                                "Extract all visible text from this image exactly as written. "
+                                "Preserve line breaks. If text is in a non-English language, "
+                                "transcribe it in the original script. Also note any key visual "
+                                "claims, statistics, or data shown. Do not translate or summarize."
+                            )
+                        }
+                    ]
+                }]
+            )
+            return response.content[0].text
+        except Exception as e:
+            logger.warning(f"   Claude Vision OCR failed: {e}")
+            return ""
+
     def transcribe_audio_local(self, audio_file_path: str) -> str:
         """Transcribe audio using local Whisper model"""
         logger.info("🗣️ Transcribing audio with local Whisper model...")
@@ -824,32 +872,93 @@ async def _analyze_claim_internal(analysis_request: AnalysisRequest) -> Analysis
     stage_times = {"start": start_time}
     
     try:
-        # Stage 0: URL Detection — download audio from social media links
+        # Stage 0: URL Detection — download audio + extract image cards from social media links
         url_metadata = None
         audio_file = None
         transcription = ""
         prosody_features = {}
+        url_card_texts: list = []
 
         if analysis_request.text_claim and is_url(analysis_request.text_claim.strip()):
-            logger.info(f"🔗 [{request_id}] URL detected — downloading audio from reel/video...")
+            url = analysis_request.text_claim.strip()
+            logger.info(f"🔗 [{request_id}] URL detected — processing media...")
+
+            # Step A: Try audio download via yt-dlp (works for reels, YouTube, TikTok, etc.)
             try:
-                audio_file, url_metadata = await download_audio(analysis_request.text_claim.strip())
+                audio_file, url_metadata = await download_audio(url)
                 logger.info(f"   Downloaded audio from {url_metadata['platform']}: {url_metadata['title'][:80]}")
-                # Transcribe — route to Sarvam for Indian languages (Method 1: metadata check)
-                transcription = await fact_checker._transcribe_audio(audio_file, metadata=url_metadata)
-                stage_times["transcription_done"] = time.time()
-                logger.info(f"   Transcription ({len(transcription)} chars): '{transcription[:100]}{'...' if len(transcription) > 100 else ''}'")
+                # Only transcribe if there is real speech (not background music)
+                if is_speech_audio(audio_file):
+                    transcription = await fact_checker._transcribe_audio(audio_file, metadata=url_metadata)
+                    stage_times["transcription_done"] = time.time()
+                    logger.info(f"   Transcription ({len(transcription)} chars): '{transcription[:100]}{'...' if len(transcription) > 100 else ''}'")
+                else:
+                    logger.info(f"   Audio is music/non-speech — skipping transcription, will rely on OCR + caption")
                 cleanup_download(url_metadata)
+                audio_file = None
             except ValueError as e:
-                # Video too long or other validation error — return immediately, don't fall back
                 raise HTTPException(status_code=400, detail=str(e))
             except Exception as e:
-                logger.warning(f"   URL audio extraction failed: {e} — falling back to URL as text claim")
+                logger.warning(f"   Audio download failed ({e})")
                 if url_metadata:
                     cleanup_download(url_metadata)
                 url_metadata = None
                 audio_file = None
-                transcription = ""
+
+            # Step B: For Instagram — also extract image cards via Instaloader
+            if 'instagram.com' in url:
+                carousel_tmp = None
+                try:
+                    logger.info(f"📸 [{request_id}] Extracting Instagram image cards...")
+                    carousel_data = await extract_instagram_images(url)
+                    carousel_tmp = carousel_data.get('_tmp_dir')
+                    slides = carousel_data.get('slides', [])
+                    logger.info(f"   Found {len(slides)} slide(s) (carousel={carousel_data.get('is_carousel')})")
+
+                    # Use carousel metadata as fallback if yt-dlp failed
+                    if url_metadata is None:
+                        url_metadata = {
+                            'title': carousel_data.get('title', ''),
+                            'description': carousel_data.get('description', ''),
+                            'platform': 'instagram',
+                            'source_url': url,
+                            '_tmp_dir': None,
+                        }
+
+                    for i, slide in enumerate(slides):
+                        if slide['type'] == 'image':
+                            ocr_text = await fact_checker._ocr_image(slide['path'])
+                            if ocr_text.strip():
+                                url_card_texts.append(f"[Card {i+1}]\n{ocr_text.strip()}")
+                                logger.info(f"   Card {i+1} OCR: {ocr_text[:80].strip()}...")
+                        elif slide['type'] == 'video':
+                            # Extract audio from MP4 before VAD/transcription (both require audio format)
+                            mp4_path = slide['path']
+                            audio_path = mp4_path.replace('.mp4', '.mp3')
+                            try:
+                                import subprocess as _sp
+                                loop = asyncio.get_event_loop()
+                                # Use run_in_executor with fixed arg list — no shell, no injection risk
+                                await loop.run_in_executor(None, lambda: _sp.run(
+                                    ['ffmpeg', '-y', '-i', mp4_path, '-vn',
+                                     '-acodec', 'libmp3lame', '-ab', '64k', audio_path],
+                                    capture_output=True, check=True
+                                ))
+                            except Exception as fe:
+                                logger.warning(f"   Card {i+1} audio extract failed: {fe}")
+                                audio_path = mp4_path
+
+                            if is_speech_audio(audio_path):
+                                card_transcript = await fact_checker._transcribe_audio(audio_path)
+                                if card_transcript.strip():
+                                    url_card_texts.append(f"[Card {i+1} audio]\n{card_transcript.strip()}")
+                            else:
+                                logger.info(f"   Card {i+1} video has no speech — skipping")
+                except Exception as e:
+                    logger.warning(f"   Instagram image extraction failed: {e}")
+                finally:
+                    if carousel_tmp:
+                        shutil.rmtree(carousel_tmp, ignore_errors=True)
 
         # Stage 1: Audio Processing
         if analysis_request.audio_data:
@@ -876,15 +985,23 @@ async def _analyze_claim_internal(analysis_request: AnalysisRequest) -> Analysis
         
         # Stage 4: Claim Extraction
         claim = analysis_request.text_claim.strip()
-        if url_metadata:
-            # URL was provided — build claim from transcription + caption
+        if url_metadata or url_card_texts:
+            # URL was provided — build claim from caption + transcription + image card OCR
             parts = []
+            caption = (url_metadata or {}).get('description', '')
+            if caption:
+                parts.append(f"Caption: {caption[:500]}")
             if transcription.strip():
                 parts.append(transcription.strip())
-            if url_metadata.get('description'):
-                parts.append(f"Caption: {url_metadata['description'][:500]}")
+            parts.extend(url_card_texts)
             claim = "\n\n".join(parts)
-            logger.info(f"📋 [{request_id}] Using transcription from URL ({url_metadata['platform']}) — transcript={'yes' if transcription.strip() else 'empty'}, caption={'yes' if url_metadata.get('description') else 'no'}")
+            platform = (url_metadata or {}).get('platform', 'instagram')
+            logger.info(
+                f"📋 [{request_id}] Claim built from URL ({platform}) — "
+                f"transcript={'yes' if transcription.strip() else 'no'}, "
+                f"caption={'yes' if caption else 'no'}, "
+                f"cards={len(url_card_texts)}"
+            )
         elif not claim and transcription:
             claim = transcription.strip()
             logger.info(f"📋 [{request_id}] Using transcribed claim")

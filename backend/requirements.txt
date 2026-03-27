@@ -19,6 +19,7 @@ pydantic-settings==2.10.1
 # AI/ML Core Libraries
 transformers==4.53.2
 torch==2.7.1
+torchaudio==2.7.1  # Must match torch version exactly (required by silero-vad)
 numpy==1.26.4
 
 # Audio Processing
@@ -44,6 +45,9 @@ psycopg2-binary==2.9.9  # PostgreSQL adapter for Railway deployment
 newsapi-python==0.2.7
 praw==7.7.1  # Reddit API
 yt-dlp>=2024.1.1  # Audio extraction from social media URLs (Instagram, TikTok, YouTube, etc.)
+instaloader>=4.15  # Instagram carousel image extraction
+silero-vad>=5.1  # Speech vs music detection (VAD)
+anthropic>=0.40.0  # Claude Vision API for image OCR
 
 # Background Tasks and Scheduling
 apscheduler==3.10.4
